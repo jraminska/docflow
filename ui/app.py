@@ -12,6 +12,7 @@ from docflow import config as cfgmod
 from docflow import registry as regmod
 from docflow import scanner, planner, executor, structure as structmod
 from docflow import latest as latestmod
+from docflow import transfer as transfermod
 from docflow import signing as signmod
 from docflow import __version__, __build_date__
 from docflow.naming import Matcher
@@ -499,13 +500,19 @@ class App(tk.Tk):
                 "Сначала нажмите «Состав из Excel» (или укажите файл Excel в Настройках).")
             return
         self._set_busy(True)
-        self.progress.start(12)
-        self.log("── Сканирование начато ──")
-        # сброс UI-состояния только в главном потоке
-        self._scanned = False
-        self.actions = []
-        self._populate()
-        threading.Thread(target=self._scan_worker, daemon=True).start()
+        try:
+            self.progress.start(12)
+            self.log("── Сканирование начато ──")
+            # сброс UI-состояния только в главном потоке
+            self._scanned = False
+            self.actions = []
+            self._populate()
+            threading.Thread(target=self._scan_worker, daemon=True).start()
+        except Exception:
+            # иначе _busy залипает и повторный «Сканировать» молча ничего не делает
+            self.progress.stop()
+            self._set_busy(False)
+            raise
 
     def _apply_scan_results(self, entries, inventory, groups_seen, plan):
         """Применить результаты скана в главном потоке UI."""
