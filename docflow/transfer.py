@@ -26,7 +26,7 @@ from typing import List, Optional, Tuple
 
 from . import planner
 from .config import AppConfig
-from .naming import _nospace, canonical_name
+from .naming import _nospace
 from .registry import RegEntry, strip_proj_prefix
 
 NEW = "🔵"     # на сервере этого документа ещё нет
@@ -41,17 +41,15 @@ _SKIP = shutil.ignore_patterns("_", "*_DRAFT*", "*_draft*", "Thumbs.db",
 
 def external_sources(cfg: AppConfig) -> List:
     """Источники-субподрядчики: включённые папки, НЕ являющиеся серверными
-    (не внутри 4300_ПД / 1100_ИИ)."""
-    roots = [os.path.normpath(p) for p in
-             (cfg.target_pd_abs, cfg.target_ii_abs, cfg.ii_abs) if p]
+    (не внутри 4300_ПД / 1100_ИИ). Пути — из ``planner._external_roots``."""
+    roots = set(planner._external_roots(cfg))
     out = []
     for s in cfg.sources:
-        if not s.enabled:
+        if not getattr(s, "enabled", True):
             continue
         p = os.path.normpath(cfg.abspath(s.path))
-        if any(p == r or p.startswith(r + os.sep) for r in roots):
-            continue                      # это серверная папка — не субподряд
-        out.append(s)
+        if p in roots:
+            out.append(s)
     return out
 
 
@@ -296,46 +294,8 @@ def doc_detail(cfg: AppConfig, entry: RegEntry, sub_folder: str,
 
 def validate(entry: RegEntry, folder: str, cfg: AppConfig, proj: str) -> List[str]:
     """Проверка субподрядной папки версии перед переносом: структура и имена.
-    Возвращает список замечаний (пусто — всё в порядке)."""
-    issues: List[str] = []
-    if not folder or not os.path.isdir(folder):
-        return ["папка версии не найдена"]
-    pfx, _d = planner.cat_match(os.path.basename(folder))
-    csh = planner._shifr_of(pfx) if pfx else ""
-    if proj and csh and csh != proj:
-        issues.append(f"другой шифр/год в имени папки: {csh} ≠ {proj}")
-
-    loose = planner._loose_catalog(entry, cfg)
-    edit_dir, pub_dir = planner._edit_of(entry, cfg), planner._pub_of(entry, cfg)
-    try:
-        names = os.listdir(folder)
-    except OSError:
-        return ["нет доступа к папке"]
-    loose_files = [n for n in names if os.path.isfile(os.path.join(folder, n))
-                   and not planner._ignored(n, cfg)]
-    if not loose:
-        if not os.path.isdir(os.path.join(folder, pub_dir)):
-            issues.append(f"нет папки {pub_dir}")
-        if loose_files:
-            issues.append(f"файлы вне {pub_dir}/{edit_dir}: " + ", ".join(loose_files[:3]))
-        pub_path = os.path.join(folder, pub_dir)
-    else:
-        pub_path = folder
-
-    core = _nospace(strip_proj_prefix(entry.oboznachenie))
-    if os.path.isdir(pub_path):
-        pdfs = [n for n in os.listdir(pub_path) if n.lower().endswith(".pdf")]
-        if not pdfs:
-            issues.append("нет pdf в публикуемой папке")
-        else:
-            bad = [n for n in pdfs if not _nospace(
-                strip_proj_prefix(os.path.splitext(n)[0])).startswith(core)]
-            if bad:
-                issues.append("не те pdf (чужое обозначение): " + ", ".join(bad[:3]))
-            canon = canonical_name(entry, ".pdf")
-            if canon and len(pdfs) == 1 and pdfs[0] != canon:
-                issues.append(f"имя не по эталону (ожидается «{canon}»)")
-    return issues
+    Тот же движок, что аудит 4300_ПД / субподряда (``planner.validate_version_folder``)."""
+    return planner.validate_version_folder(entry, folder, cfg, proj)
 
 
 def compare(cfg: AppConfig, entries: List[RegEntry], sources=None) -> List[dict]:

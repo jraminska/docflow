@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from . import registry
-from .config import AppConfig
+from .config import AppConfig, SERVICE_DIRS, is_ignored
 from .naming import recognize, Recognized, Matcher, _nospace, canonical_name
 from .registry import RegEntry, strip_proj_prefix, section_code
 from .scanner import FileRec
@@ -79,17 +79,20 @@ def _check(cfg: AppConfig, cid: str) -> bool:
 
 
 def _ignored(name: str, cfg: AppConfig) -> bool:
-    """Служебный/временный файл (Thumbs.db, *.tmp, *_DRAFT* …) — не трогаем.
-    Скрытые/служебные файлы самой программы (.docflow*, любые точечные) —
-    игнорируем ВСЕГДА, даже если их нет в списке масок проекта."""
-    import fnmatch
-    low = name.lower()
-    if low.startswith(".docflow") or low.startswith("."):
-        return True
-    for pat in cfg.ignore_patterns:
-        if fnmatch.fnmatch(low, pat.lower()):
-            return True
-    return False
+    """Служебный/временный файл (Thumbs.db, *.tmp, *_DRAFT* …) — не трогаем."""
+    return is_ignored(name, cfg.ignore_patterns)
+
+
+def tolerated_dirs(cfg: AppConfig, entries: Optional[List[RegEntry]] = None) -> set:
+    """Служебные имена папок, которые не считаем посторонними.
+    !ARCHIVE обрабатывается отдельно (допустимость зависит от места)."""
+    names = {d for d in SERVICE_DIRS if d not in (cfg.archive_name, "!ARCHIVE")}
+    names.update({cfg.edit_dir, cfg.published_dir, "!REF"})
+    names |= set(cfg.exclude_folders or [])
+    for e in entries or []:
+        names.add(_edit_of(e, cfg))
+        names.add(_pub_of(e, cfg))
+    return names
 
 
 def cat_match(name: str):
@@ -544,6 +547,84 @@ def _audit_doc(cfg: AppConfig, e: RegEntry, doc: str, proj: str, group: str,
     return out
 
 
+def _published_pdf_issues(entry: RegEntry, folder: str, cfg: AppConfig) -> List[str]:
+    """Доп. замечания по PDF перед переносом (комплектность публикуемой папки)."""
+    issues: List[str] = []
+    loose = _loose_catalog(entry, cfg)
+    pub_dir = _pub_of(entry, cfg)
+    pub_path = folder if loose else os.path.join(folder, pub_dir)
+    if not os.path.isdir(pub_path):
+        return issues
+    core = _nospace(strip_proj_prefix(entry.oboznachenie))
+    try:
+        pdfs = [n for n in os.listdir(pub_path) if n.lower().endswith(".pdf")]
+    except OSError:
+        return ["нет доступа к папке"]
+    if not pdfs:
+        issues.append("нет pdf в публикуемой папке")
+        return issues
+    bad = [n for n in pdfs if not _nospace(
+        strip_proj_prefix(os.path.splitext(n)[0])).startswith(core)]
+    if bad:
+        issues.append("не те pdf (чужое обозначение): " + ", ".join(bad[:3]))
+    canon = canonical_name(entry, ".pdf")
+    if canon and len(pdfs) == 1 and pdfs[0] != canon:
+        issues.append(f"имя не по эталону (ожидается «{canon}»)")
+    return issues
+
+
+def _issues_from_audit_actions(actions: List[Action], entry: RegEntry,
+                               cfg: AppConfig) -> List[str]:
+    """Перевод Action единого движка в текстовые замечания (для transfer)."""
+    issues: List[str] = []
+    loose_names: List[str] = []
+    edit_dir, pub_dir = _edit_of(entry, cfg), _pub_of(entry, cfg)
+    seen_missing: set = set()
+    for a in actions:
+        if a.check == "foreign_shifr":
+            base = os.path.basename(a.src)
+            pfx, _d = cat_match(base)
+            csh = _shifr_of(pfx) if pfx else ""
+            m = re.search(r"\(в проекте ([^)]+)\)", a.reason or "")
+            proj = m.group(1) if m else ""
+            if csh and proj:
+                issues.append(f"другой шифр/год в имени папки: {csh} ≠ {proj}")
+            elif a.reason:
+                issues.append(a.reason)
+        elif a.kind == MKSTRUCT and a.check == "edit_pub":
+            for d in a.mkdirs or []:
+                name = os.path.basename(d)
+                if name not in seen_missing:
+                    seen_missing.add(name)
+                    issues.append(f"нет папки {name}")
+        elif a.kind == MOVE and a.check in ("loose_files", "edit_pub"):
+            loose_names.append(os.path.basename(a.src))
+    if loose_names:
+        uniq = list(dict.fromkeys(loose_names))
+        issues.append(f"файлы вне {pub_dir}/{edit_dir}: " + ", ".join(uniq[:3]))
+    return issues
+
+
+def validate_version_folder(entry: RegEntry, folder: str, cfg: AppConfig,
+                            proj: str) -> List[str]:
+    """Единая проверка каталога версии → список замечаний (сервер и субподряд).
+
+    Использует тот же движок, что ``_audit_version_catalog`` / аудит 4300_ПД,
+    плюс комплектность PDF перед переносом.
+    """
+    if not folder or not os.path.isdir(folder):
+        return ["папка версии не найдена"]
+    try:
+        os.listdir(folder)
+    except OSError:
+        return ["нет доступа к папке"]
+    actions = _audit_version_catalog(cfg, entry, folder, proj or "", "",
+                                     do_files=True)
+    issues = _issues_from_audit_actions(actions, entry, cfg)
+    issues.extend(_published_pdf_issues(entry, folder, cfg))
+    return issues
+
+
 def _base_structure_actions(cfg: AppConfig, entries: List[RegEntry],
                             covered_roots: Optional[set] = None) -> List[Action]:
     """Аудит структуры по всем областям (ПД и ИИ). Документы каждой области
@@ -637,13 +718,7 @@ def _foreign_folders(cfg: AppConfig, root: str,
             cur = parent
 
     # служебные подпапки структуры (молча пропускаем) + явно исключённые пользователем
-    tolerated = {cfg.edit_dir, cfg.published_dir, "!LATEST", "!WORK", "!SUPPORT",
-                 "!REF", "!LINKS", "!INITIAL", "DWG", "DOC", "PDF"}
-    # имена ред./публ. папок, заданные у томов (могут отличаться: РЕД/НЕРЕД и т.п.)
-    for e in entries:
-        tolerated.add(_edit_of(e, cfg))
-        tolerated.add(_pub_of(e, cfg))
-    tolerated |= set(cfg.exclude_folders)        # папки, исключённые из проверки
+    tolerated = tolerated_dirs(cfg, entries)
     # рабочие подпапки внутри томов (граф./текст. часть, подгрузки, ред. форматы) —
     # это ОТКЛОНЕНИЕ от стандарта. Список префиксов — из настроек проекта.
     work_prefixes = tuple(cfg.work_prefixes or [])
@@ -759,9 +834,7 @@ def audit_external(cfg: AppConfig, entries: List[RegEntry]) -> List[Action]:
     out: List[Action] = []
     cores = {_nospace(strip_proj_prefix(e.oboznachenie)): e for e in entries}
     proj = _project_shifr(entries)
-    service = {cfg.edit_dir, cfg.published_dir, "!LATEST", "!WORK", "!SUPPORT",
-               "!REF", "!LINKS", "!INITIAL", "DWG", "DOC", "PDF"}
-    service |= set(cfg.exclude_folders)
+    service = tolerated_dirs(cfg, entries)
     np = os.path.normpath
     for root in _external_roots(cfg):
         if not os.path.isdir(root):

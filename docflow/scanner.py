@@ -6,12 +6,13 @@
 """
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import json
 import os
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
+
+from .config import is_ignored
 
 
 @dataclass
@@ -27,10 +28,7 @@ class FileRec:
 
 
 def _ignored(name: str, patterns: List[str]) -> bool:
-    low = name.lower()
-    if low.startswith(".docflow") or low.startswith("."):
-        return True                      # служебные файлы программы / скрытые
-    return any(fnmatch.fnmatch(name, p) for p in patterns)
+    return is_ignored(name, patterns)
 
 
 def sha1_of(path: str, limit_mb: int = 200) -> Optional[str]:
