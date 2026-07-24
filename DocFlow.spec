@@ -3,6 +3,8 @@ from PyInstaller.utils.hooks import collect_submodules
 
 hiddenimports = []
 hiddenimports += collect_submodules('openpyxl')
+hiddenimports += collect_submodules('ui')
+hiddenimports += collect_submodules('docflow')
 
 
 a = Analysis(

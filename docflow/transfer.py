@@ -6,16 +6,23 @@
 {обозначение}_{дата} в папку документа на сервере.
 
 Старые версии на сервере не трогаем (их можно убрать в !ARCHIVE обычным
-сканированием). Если папка версии на сервере уже есть — не сливаем
-содержимое (dirs_exist_ok), а пропускаем с предупреждением: на сетевых
-дисках атомарная замена ненадёжна.
+сканированием).
+
+Атомарная замена папки версии (Windows / сетевые диски):
+  1) копируем в соседний временный каталог ``{dest}.tmp_docflow``;
+  2) если dest нет — ``os.rename(tmp, dest)``;
+  3) если dest есть — rename-dance: dest → ``{dest}.bak_docflow``,
+     tmp → dest, затем удаляем bak.
+``os.replace`` надёжен для файлов; для каталогов на Windows используем
+последовательность rename. При сбое на середине — откат bak → dest,
+временные каталоги чистим; слияния old+new не оставляем (пропуск).
 """
 from __future__ import annotations
 
 import os
 import shutil
 import zlib
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import planner
 from .config import AppConfig
@@ -372,13 +379,67 @@ def compare(cfg: AppConfig, entries: List[RegEntry], sources=None) -> List[dict]
     return rows
 
 
-def transfer(cfg: AppConfig, rows: List[dict]) -> tuple:
-    """Копирует папку версии субподрядчика в папку документа на сервере как
-    {обозначение}_{дата} (целиком).
+_TMP_SUFFIX = ".tmp_docflow"
+_BAK_SUFFIX = ".bak_docflow"
 
-    Если dest уже существует — НЕ мержим (избегаем тихих leftover-файлов),
-    а пропускаем. Возвращает (done, skipped):
-      done    — [(обозначение, дата), ...] успешно скопированные;
+
+def _rmtree_quiet(path: str) -> None:
+    if path and os.path.isdir(path):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _atomic_put_tree(src: str, dest: str) -> str:
+    """Скопировать дерево src в dest атомарно через соседний temp.
+
+    Возвращает ``"new"`` или ``"replaced"``. При ошибке после частичного
+    rename пытается вернуть старый dest из bak; не оставляет смесь old+new.
+    Бросает OSError / shutil.Error при окончательном провале.
+    """
+    parent = os.path.dirname(dest) or "."
+    base = os.path.basename(dest)
+    tmp = os.path.join(parent, base + _TMP_SUFFIX)
+    bak = os.path.join(parent, base + _BAK_SUFFIX)
+
+    # чужие leftovers от прошлого сбоя — убрать, чтобы не мешали
+    _rmtree_quiet(tmp)
+    _rmtree_quiet(bak)
+
+    shutil.copytree(src, tmp, dirs_exist_ok=False, ignore=_SKIP)
+
+    if not os.path.exists(dest):
+        try:
+            os.rename(tmp, dest)
+        except OSError:
+            _rmtree_quiet(tmp)
+            raise
+        return "new"
+
+    # dest есть: rename-dance (без merge)
+    moved_aside = False
+    try:
+        os.rename(dest, bak)
+        moved_aside = True
+        os.rename(tmp, dest)
+    except OSError:
+        if moved_aside and not os.path.exists(dest) and os.path.isdir(bak):
+            try:
+                os.rename(bak, dest)          # откат: вернуть старое
+            except OSError:
+                pass                          # bak останется — лучше, чем пусто
+        _rmtree_quiet(tmp)
+        raise
+    _rmtree_quiet(bak)
+    return "replaced"
+
+
+def transfer(cfg: AppConfig, rows: List[dict]) -> Tuple[list, list]:
+    """Копирует папку версии субподрядчика в папку документа на сервере как
+    {обозначение}_{дата} (целиком), через временный соседний каталог.
+
+    Если dest уже есть — атомарно заменяет (не dirs_exist_ok-merge).
+    При сбое замены — пропуск с причиной, старое содержимое по возможности
+    сохраняется. Возвращает (done, skipped):
+      done    — [(обозначение, дата, \"new\"|\"replaced\"), ...];
       skipped — [(обозначение, дата, причина), ...].
     """
     done: List[tuple] = []
@@ -390,11 +451,11 @@ def transfer(cfg: AppConfig, rows: List[dict]) -> tuple:
         doc = planner._doc_folder(e, cfg)
         os.makedirs(doc, exist_ok=True)
         dest = os.path.join(doc, f"{e.oboznachenie}_{sdate}")
-        if os.path.exists(dest):
+        try:
+            how = _atomic_put_tree(folder, dest)
+        except (OSError, shutil.Error) as err:
             skipped.append((e.oboznachenie, sdate,
-                            f"на сервере уже есть «{os.path.basename(dest)}» — "
-                            "пропущено (без слияния)"))
+                            f"не удалось перенести «{os.path.basename(dest)}»: {err}"))
             continue
-        shutil.copytree(folder, dest, dirs_exist_ok=False, ignore=_SKIP)
-        done.append((e.oboznachenie, sdate))
+        done.append((e.oboznachenie, sdate, how))
     return done, skipped
