@@ -1,15 +1,16 @@
-"""Тесты executor: _unique_dst и stop_on_error."""
+"""Тесты executor: _unique_dst, stop_on_error и journal."""
 from __future__ import annotations
 
 import os
 import sys
-import tempfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from docflow.executor import _unique_dst, execute  # noqa: E402
+from docflow.executor import (  # noqa: E402
+    _atomic_write_text, _unique_dst, execute, read_journal,
+)
 from docflow.planner import Action, MKSTRUCT, RENAME  # noqa: E402
 
 
@@ -57,3 +58,13 @@ def test_execute_continue_on_error(tmp_path):
     assert not results[0].ok
     assert results[1].ok
     assert arch.is_dir()
+
+
+def test_journal_atomic_write_and_skips_bad_lines(tmp_path):
+    jnl = tmp_path / "journal.jsonl"
+    _atomic_write_text(str(jnl), '{"batch":"1","ops":[]}\nnot-json\n{"batch":"2","ops":[]}\n')
+    batches = read_journal(str(jnl))
+    assert [b["batch"] for b in batches] == ["1", "2"]
+    # после успешной записи tmp не остаётся рядом
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".docflow_jnl_")]
+    assert leftovers == []

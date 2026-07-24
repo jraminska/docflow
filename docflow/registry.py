@@ -129,7 +129,7 @@ def read_object_name(path: str, sheet: Optional[str] = None) -> str:
         return ""
     try:
         wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  — openpyxl кидает разные типы; поле декоративное
         return ""
     _ws, rows = _pick_sheet(wb, sheet)
     for r in rows[:8]:

@@ -183,6 +183,7 @@ def _atomic_write_text(path: str, text: str) -> None:
             f.write(text)
         os.replace(tmp, path)
     except Exception:
+        # любая ошибка записи — убрать tmp и пробросить вверх (журнал не портим)
         try:
             os.unlink(tmp)
         except OSError:
@@ -224,7 +225,8 @@ def read_journal(journal_path: str) -> List[dict]:
             if line:
                 try:
                     out.append(json.loads(line))
-                except ValueError:
+                except json.JSONDecodeError:
+                    # битая строка jsonl — пропускаем, остальные батчи читаем
                     pass
     return out
 

@@ -169,6 +169,7 @@ def default_config_path() -> str:
         try:
             os.replace(old, new)
         except OSError:
+            # миграция best-effort: оставим старый файл, load() всё равно вернёт new
             pass
     return new
 
@@ -179,7 +180,8 @@ def hide_file(path: str) -> None:
         import ctypes
         FILE_ATTRIBUTE_HIDDEN = 0x02
         ctypes.windll.kernel32.SetFileAttributesW(str(path), FILE_ATTRIBUTE_HIDDEN)
-    except Exception:  # noqa: BLE001
+    except (AttributeError, OSError):
+        # не Windows / нет прав на атрибуты — косметика, не критично
         pass
 
 
@@ -190,7 +192,8 @@ def unhide_file(path: str) -> None:
         if os.path.exists(path):
             FILE_ATTRIBUTE_NORMAL = 0x80
             ctypes.windll.kernel32.SetFileAttributesW(str(path), FILE_ATTRIBUTE_NORMAL)
-    except Exception:  # noqa: BLE001
+    except (AttributeError, OSError):
+        # не Windows / нет прав — дальше пишем как есть
         pass
 
 
@@ -274,7 +277,8 @@ def load_project_settings(cfg: AppConfig) -> bool:
     try:
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, json.JSONDecodeError):
+        # битый/недоступный файл настроек — оставляем текущий cfg
         return False
     for fld in PROJECT_FIELDS:
         if fld in data:

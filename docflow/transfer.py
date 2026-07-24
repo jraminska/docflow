@@ -425,7 +425,7 @@ def _atomic_put_tree(src: str, dest: str) -> str:
             try:
                 os.rename(bak, dest)          # откат: вернуть старое
             except OSError:
-                pass                          # bak останется — лучше, чем пусто
+                pass  # bak останется рядом — лучше, чем потерять dest
         _rmtree_quiet(tmp)
         raise
     _rmtree_quiet(bak)

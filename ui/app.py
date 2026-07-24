@@ -181,6 +181,7 @@ class App(tk.Tk):
         try:
             style.theme_use("vista")
         except tk.TclError:
+            # тема недоступна (не Windows / другой Tcl) — оставляем дефолт
             pass
         style.configure("Treeview", rowheight=24)
 
@@ -1148,9 +1149,12 @@ class App(tk.Tk):
             os.startfile(path)            # Windows
         except AttributeError:
             import subprocess
-            subprocess.Popen(["xdg-open", path])
-        except Exception:  # noqa: BLE001
-            pass
+            try:
+                subprocess.Popen(["xdg-open", path])
+            except OSError as e:
+                messagebox.showerror("Папка", f"Не удалось открыть:\n{path}\n\n{e}")
+        except OSError as e:
+            messagebox.showerror("Папка", f"Не удалось открыть:\n{path}\n\n{e}")
 
     # ---------------- применение ----------------
     def apply(self, current_only: bool):

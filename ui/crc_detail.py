@@ -89,7 +89,7 @@ class CrcDetailDialog(tk.Toplevel):
         if path and os.path.isdir(path):
             try:
                 os.startfile(path)  # noqa: SLF001  (Windows)
-            except Exception:  # noqa: BLE001
-                messagebox.showinfo("Папка", path)
+            except (AttributeError, OSError) as e:
+                messagebox.showerror("Папка", f"Не удалось открыть:\n{path}\n\n{e}")
         else:
             messagebox.showinfo("Папка", "Папка недоступна.")

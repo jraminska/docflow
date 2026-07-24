@@ -80,7 +80,8 @@ def load_manifest(cfg: AppConfig) -> dict:
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except (OSError, ValueError):
+            except (OSError, json.JSONDecodeError):
+                # битый манифест — как будто его нет (пересоберём при обновлении)
                 pass
     return {}
 
@@ -99,6 +100,7 @@ def save_manifest(cfg: AppConfig, man: dict) -> None:
         try:
             os.remove(old)
         except OSError:
+            # старый путь мог быть занят — новый уже записан
             pass
 
 
@@ -260,6 +262,7 @@ def remove_paths(paths: List[str]) -> int:
                 os.remove(p)
                 n += 1
         except OSError:
+            # файл мог исчезнуть/быть занят — идём дальше по списку
             pass
     return n
 
