@@ -12,6 +12,7 @@ from docflow import config as cfgmod
 from docflow import registry as regmod
 from docflow import scanner, planner, executor, structure as structmod
 from docflow import latest as latestmod
+from docflow import transfer as transfermod
 from docflow import signing as signmod
 from docflow import __version__, __build_date__
 from docflow.naming import Matcher
@@ -297,15 +298,22 @@ class App(tk.Tk):
                                   font=("Segoe UI", 9), cursor="hand2")
         self.lbl_file.pack(anchor="w")
         self.lbl_file.bind("<Button-1>", lambda e: self._copy_file_name())
+
+        # таблица + полный текст: вертикальный sash — можно «стянуть вниз» как в Excel
+        right_pw = ttk.PanedWindow(right, orient="vertical")
+        right_pw.pack(fill="both", expand=True)
+
+        table_fr = ttk.Frame(right_pw)
         cols = ("chk", "kind", "comment")
-        self.tree = ttk.Treeview(right, columns=cols, show="headings", selectmode="extended")
+        self.tree = ttk.Treeview(table_fr, columns=cols, show="headings",
+                                 selectmode="extended")
         self.tree.heading("chk", text="✓")
         self.tree.heading("kind", text="Действие")
         self.tree.heading("comment", text="Что будет выполнено")
         self.tree.column("chk", width=34, anchor="center", stretch=False)
         self.tree.column("kind", width=210, anchor="w", stretch=False)
         self.tree.column("comment", width=520, anchor="w", stretch=True)
-        rsb = ttk.Scrollbar(right, orient="vertical", command=self.tree.yview)
+        rsb = ttk.Scrollbar(table_fr, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=rsb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         rsb.pack(side="right", fill="y")
@@ -321,6 +329,19 @@ class App(tk.Tk):
         self.tree.bind("<Button-1>", self._on_click)
         self.tree.bind("<space>", self._on_space)
         self.tree.bind("<Double-1>", self._open_location)
+        self.tree.bind("<<TreeviewSelect>>", self._on_action_select)
+        right_pw.add(table_fr, weight=3)
+
+        note_fr = ttk.LabelFrame(right_pw, text="Полный текст замечания", padding=4)
+        self.txt_note = tk.Text(
+            note_fr, height=4, wrap="word", state="disabled",
+            font=("Segoe UI", 9), relief="flat", background="#f7f7f7")
+        note_sb = ttk.Scrollbar(note_fr, orient="vertical",
+                                command=self.txt_note.yview)
+        self.txt_note.configure(yscrollcommand=note_sb.set)
+        self.txt_note.pack(side="left", fill="both", expand=True)
+        note_sb.pack(side="right", fill="y")
+        right_pw.add(note_fr, weight=1)
         pw.add(right, weight=2)
 
         # нижняя панель: применить + лог
@@ -499,13 +520,19 @@ class App(tk.Tk):
                 "Сначала нажмите «Состав из Excel» (или укажите файл Excel в Настройках).")
             return
         self._set_busy(True)
-        self.progress.start(12)
-        self.log("── Сканирование начато ──")
-        # сброс UI-состояния только в главном потоке
-        self._scanned = False
-        self.actions = []
-        self._populate()
-        threading.Thread(target=self._scan_worker, daemon=True).start()
+        try:
+            self.progress.start(12)
+            self.log("── Сканирование начато ──")
+            # сброс UI-состояния только в главном потоке
+            self._scanned = False
+            self.actions = []
+            self._populate()
+            threading.Thread(target=self._scan_worker, daemon=True).start()
+        except Exception:
+            # иначе _busy залипает и повторный «Сканировать» молча ничего не делает
+            self.progress.stop()
+            self._set_busy(False)
+            raise
 
     def _apply_scan_results(self, entries, inventory, groups_seen, plan):
         """Применить результаты скана в главном потоке UI."""
@@ -978,9 +1005,38 @@ class App(tk.Tk):
             return f"{verb}: «{src}»  →  {d}"
         return a.reason or src
 
+    def _set_note_preview(self, text: str):
+        """Полный текст «Что будет выполнено» под таблицей (без обрезки)."""
+        self.txt_note.config(state="normal")
+        self.txt_note.delete("1.0", "end")
+        if text:
+            self.txt_note.insert("1.0", text)
+        self.txt_note.config(state="disabled")
+
+    def _on_action_select(self, _event=None):
+        sel = self.tree.selection()
+        if not sel:
+            self._set_note_preview("")
+            return
+        iid = sel[0]
+        a = self.row_action.get(iid)
+        if a:
+            comment = self._comment(a)
+            parts = [f"Действие: {a.title}", "", comment]
+            if a.reason and a.reason.strip() and a.reason.strip() not in comment:
+                parts.extend(["", f"Причина: {a.reason}"])
+            self._set_note_preview("\n".join(parts))
+            return
+        vals = self.tree.item(iid, "values")
+        kind = vals[1] if len(vals) > 1 else ""
+        comment = vals[2] if len(vals) > 2 else ""
+        self._set_note_preview(
+            "\n\n".join(p for p in (kind, comment) if p).strip())
+
     def _render_detail(self, acts, label, sub=None):
         self.tree.delete(*self.tree.get_children())
         self.row_action.clear()
+        self._set_note_preview("")
         self.cur_actions = list(acts)
         self.lbl_detail.config(text=f"Действия: {label}")
         flt = self.var_filter.get()
