@@ -710,21 +710,11 @@ class App(tk.Tk):
         return [p for p in re.split(r"[\\/]+", rel) if p and p != "."]
 
     def _is_ignored_name(self, name: str) -> bool:
-        import fnmatch
-        low = name.lower()
-        return any(fnmatch.fnmatch(low, p.lower()) for p in self.cfg.ignore_patterns)
+        return planner._ignored(name, self.cfg)
 
     def _service_names(self) -> set:
-        c = self.cfg
-        names = {c.edit_dir, c.published_dir, c.archive_name, "!LATEST", "!WORK",
-                 "!SUPPORT", "!REF", "!LINKS", "!INITIAL", "DWG", "DOC", "PDF"}
-        # имена ред./публ. папок, заданные у отдельных томов (РЕД/НЕРЕД и т.п.)
-        for e in self.entries:
-            if getattr(e, "edit_dir", ""):
-                names.add(e.edit_dir)
-            if getattr(e, "pub_dir", ""):
-                names.add(e.pub_dir)
-        return names
+        # дерево UI обрезает и !ARCHIVE — добавляем к общему списку служебных
+        return planner.tolerated_dirs(self.cfg, self.entries) | {self.cfg.archive_name}
 
     def _node_parts(self, folder: str, base: str = None) -> list:
         """Путь до уровня каталога версии (служебные папки !EDIT/!PUBLISHED/

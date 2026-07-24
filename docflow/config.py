@@ -6,14 +6,28 @@
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 from dataclasses import dataclass, field, asdict
-from typing import List
+from typing import List, Optional
 
 
 DEFAULT_IGNORE = ["Thumbs.db", "desktop.ini", ".DS_Store", "~$*", "*.tmp", "*.lnk",
                   "*.url", "*_DRAFT*", "*_draft*", "*_Draft*", ".docflow*"]
+
+
+def is_ignored(name: str, patterns: Optional[List[str]] = None) -> bool:
+    """Служебный/временный файл (Thumbs.db, *.tmp, *_DRAFT* …) или скрытый.
+    Скрытые/служебные файлы программы (.docflow*, любые точечные) —
+    игнорируем ВСЕГДА, даже если их нет в списке масок."""
+    low = name.lower()
+    if low.startswith(".docflow") or low.startswith("."):
+        return True
+    for pat in patterns or []:
+        if fnmatch.fnmatch(low, pat.lower()):
+            return True
+    return False
 
 # Типы проверок структуры. Каждую можно включить/выключить в настройках —
 # это и есть «настраиваемые типы проверок» (без правки кода).
