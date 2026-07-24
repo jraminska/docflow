@@ -1,0 +1,2 @@
+openpyxl>=3.1
+# для тестов: pip install -r requirements-dev.txt
