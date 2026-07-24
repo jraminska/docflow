@@ -1,0 +1,26 @@
+{
+  "projects": [],
+  "project_root": "",
+  "registry_path": "8300_ВыпускПД/!LATEST/523-ПИР-24_СП_Наименование файлов.xlsx",
+  "registry_sheet": "ПИР",
+  "target_pd": "4300_ПД",
+  "target_ii": "1100_ИИ",
+  "latest_dir": "8300_ВыпускПД/!LATEST",
+  "archive_name": "!ARCHIVE",
+  "sources": [
+    { "name": "Сервер — ПД", "path": "4300_ПД", "category": "ПД", "enabled": true },
+    { "name": "Сервер — ИИ", "path": "1100_ИИ", "category": "ИИ", "enabled": true },
+    { "name": "Субподряд (внешний диск)", "path": "D:/Субподряд/4300_ПД", "category": "ПД", "enabled": false }
+  ],
+  "ignore_patterns": ["Thumbs.db", "desktop.ini", ".DS_Store", "~$*", "*.tmp", "*.lnk", "*.url"],
+  "scan_skip_dirs": ["!ARCHIVE", "!WORK", "!SUPPORT", "!LINKS", "!INITIAL", "!LATEST", "DOC", "DWG"],
+  "exclude_folders": [],
+  "latest_extensions": [".pdf"],
+  "edit_dir": "!EDIT",
+  "published_dir": "!PUBLISHED",
+  "published_extensions": [".pdf", ".sig"],
+  "smeta_short_codes": ["СМ"],
+  "smeta_razdel": "12",
+  "use_hash": false,
+  "date_from_mtime_if_absent": true
+}
