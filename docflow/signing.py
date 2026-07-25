@@ -33,6 +33,43 @@ DOC_EXTS = (".pdf", ".xml", ".gge", ".gsfx", ".xlsx", ".docx", ".dwg", ".dwx", "
 
 
 # ---------- шаг 1: собрать комплект на подпись ----------
+def _is_special_folder(name: str, cfg: AppConfig) -> bool:
+    """Служебные папки (!ARCHIVE, !EDIT, !PUBLISHED …) — не разделы."""
+    if not name or name.startswith("!"):
+        return True
+    low = name.lower()
+    for attr in ("archive_name", "edit_dir", "published_dir"):
+        val = getattr(cfg, attr, "") or ""
+        if val and low == val.lower():
+            return True
+    return False
+
+
+def list_signing_folders(source_root: str, cfg: AppConfig) -> List[str]:
+    """Подпапки-разделы (или области) в корне источника для выбора при сборе.
+
+    Для ``4300_ПД`` / ``1100_ИИ/04_Отчеты`` — разделы ``01_ПЗ``, ``05_ИОС``…
+    Для ``!LATEST`` с раскладкой ``{area}/{section}`` — области ``02_ПД``,
+    ``01_ИИ`` (выбор целой области). Служебные ``!*`` не включаются.
+    Возвращает отсортированные имена папок (не полные пути).
+    """
+    if not source_root or not os.path.isdir(source_root):
+        return []
+    names: List[str] = []
+    try:
+        entries = os.listdir(source_root)
+    except OSError:
+        return []
+    for name in entries:
+        full = os.path.join(source_root, name)
+        if not os.path.isdir(full):
+            continue
+        if _is_special_folder(name, cfg):
+            continue
+        names.append(name)
+    return sorted(names, key=lambda n: n.lower())
+
+
 def _newest_versions(root: str, cfg: AppConfig) -> dict:
     """{ядро_обозначения: (дата, папка_каталога_версии)} — самая свежая версия
     каждого документа в дереве (по каталогам {обозначение}_{дата})."""
@@ -57,16 +94,45 @@ def _newest_versions(root: str, cfg: AppConfig) -> dict:
     return best
 
 
+def _merge_newest(best: dict, more: dict) -> None:
+    """Объединить результаты ``_newest_versions`` (берём более свежую дату)."""
+    for core, val in more.items():
+        cur = best.get(core)
+        if cur is None or val[0] > cur[0]:
+            best[core] = val
+
+
 def collect_for_signing(cfg: AppConfig, source_root: str, target_dir: str,
-                        exts=None) -> Tuple[List[str], int]:
+                        exts=None, selected_folders=None) -> Tuple[List[str], int]:
     """Собрать актуальные файлы (exts) из структурированной папки в ПЛОСКУЮ
     target_dir. Редактируемые исходники (!EDIT) не берём. Возвращает
-    (список_скопированных_имён, число_пропущенных_дублей)."""
+    (список_скопированных_имён, число_пропущенных_дублей).
+
+    ``selected_folders`` — имена или абсолютные пути дочерних папок-разделов
+    под ``source_root``. ``None`` — сканировать весь корень (как раньше);
+    пустой список — ничего не копировать.
+    """
     exts = exts or DEFAULT_SIGN_EXTS
     want = {(e if e.startswith(".") else "." + e).lower() for e in exts}
     os.makedirs(target_dir, exist_ok=True)
     edit_names = {cfg.edit_dir.lower(), "!edit"}
-    best = _newest_versions(source_root, cfg)
+
+    if selected_folders is None:
+        scan_roots = [source_root]
+    else:
+        scan_roots = []
+        for item in selected_folders:
+            if not item:
+                continue
+            path = item if os.path.isabs(item) else os.path.join(source_root, item)
+            path = os.path.normpath(path)
+            if os.path.isdir(path):
+                scan_roots.append(path)
+
+    best: dict = {}
+    for root in scan_roots:
+        _merge_newest(best, _newest_versions(root, cfg))
+
     copied: List[str] = []
     skipped = 0
     for _core, (_d6, cat) in sorted(best.items()):
