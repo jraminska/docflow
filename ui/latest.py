@@ -4,7 +4,8 @@ from __future__ import annotations
 import os
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+import xml.etree.ElementTree as ET
+from tkinter import ttk, filedialog, messagebox
 
 from docflow import latest as latestmod
 from docflow import planner
@@ -24,7 +25,7 @@ class LatestDialog(tk.Toplevel):
         self.registry_path = registry_path
         self.rows = []
         self.row_data = {}
-        self.geometry("920x620")
+        self.geometry("1120x620")
         self.transient(parent)
         self.grab_set()
         self._build()
@@ -45,6 +46,8 @@ class LatestDialog(tk.Toplevel):
                    command=lambda: self._check_all(False)).pack(side="left")
         ttk.Button(top, text="🧹 Лишнее в !LATEST",
                    command=self._show_extras).pack(side="left", padx=8)
+        ttk.Button(top, text="📝 Проверить актуальность ПЗ",
+                   command=self._check_pz).pack(side="left", padx=2)
         ttk.Button(top, text="🔒 Зафиксировать CRC",
                    command=self._fix_crc).pack(side="left", padx=2)
         ttk.Button(top, text="🔍 Проверить целостность",
@@ -89,6 +92,53 @@ class LatestDialog(tk.Toplevel):
             messagebox.showinfo("!LATEST", "Лишнего в !LATEST не найдено.")
             return
         ExtrasDialog(self, extras, on_done=self._compare)
+
+    def _check_pz(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="Выберите XML пояснительной записки",
+            initialdir=self.cfg.latest_abs,
+            filetypes=[("XML", "*.xml"), ("Все файлы", "*.*")])
+        if not path:
+            return
+        try:
+            result = latestmod.check_explanatory_note_updates(
+                path, self.cfg.latest_abs)
+        except (OSError, ValueError, ET.ParseError) as e:
+            messagebox.showerror("Проверка ПЗ", str(e), parent=self)
+            return
+        if not result["needs_update"]:
+            messagebox.showinfo(
+                "Проверка ПЗ",
+                f"✓ Обновлять ПЗ не требуется.\n\n"
+                f"Версия ПЗ: {result['pz_version']}\n"
+                f"Проверено ссылок: {result['declared_files']}\n"
+                f"Найдено файлов в !LATEST: {result['matched_files']}",
+                parent=self)
+            return
+
+        win = tk.Toplevel(self)
+        win.title("ПЗ требуется обновить")
+        win.geometry("860x560")
+        win.transient(self)
+        ttk.Label(
+            win, padding=10, foreground="#c0392b",
+            text=f"⚠ Найдены более свежие или изменённые файлы: "
+                 f"{len(result['updates'])}. Версия ПЗ: {result['pz_version']}.",
+            font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        text = tk.Text(win, wrap="word")
+        text.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        for row in result["updates"]:
+            reasons = []
+            if row["version_newer"]:
+                reasons.append(f"новая версия {row['version']}")
+            if row["checksum_changed"]:
+                reasons.append("изменилось содержимое (CRC32)")
+            text.insert("end", f"• {row['name']}\n"
+                               f"  {', '.join(reasons)}\n"
+                               f"  {row['path']}\n\n")
+        text.configure(state="disabled")
+        ttk.Button(win, text="Закрыть", command=win.destroy).pack(
+            side="right", padx=10, pady=(0, 10))
 
     def _fix_crc(self):
         n = transfermod.fix_crc(self.cfg, self.cfg.latest_abs)
