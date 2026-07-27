@@ -540,8 +540,25 @@ def _audit_doc(cfg: AppConfig, e: RegEntry, doc: str, proj: str, group: str,
             full = os.path.join(doc, name)
             if name == cfg.archive_name or not os.path.isdir(full):
                 continue
-            pfx, _d = cat_match(name)
-            if not pfx or _nospace(strip_proj_prefix(pfx)) != core:
+            pfx, date6 = cat_match(name)
+            if not pfx:
+                continue
+            prefix_core = _nospace(strip_proj_prefix(pfx))
+            if prefix_core != core:
+                # Частая ошибка: в имя каталога версии попало полное имя файла,
+                # например ТХ1_Раздел ПД №6 Часть №1_260727. Это всё ещё версия
+                # текущего тома, но каталог должен называться только
+                # {обозначение}_{дата}.
+                if date6 and prefix_core.startswith(core + "_"):
+                    dst = os.path.join(doc, f"{e.oboznachenie}_{date6}")
+                    out.append(Action(
+                        RENAME, full, dst,
+                        reason=f"{e.key}: имя каталога версии по эталону: "
+                               f"{name} → {os.path.basename(dst)}",
+                        key=e.key, node=doc, group=group,
+                        check="version_in_doc"))
+                    out += _audit_version_catalog(
+                        cfg, e, full, proj, group, do_files)
                 continue
             out += _audit_version_catalog(cfg, e, full, proj, group, do_files)
     return out

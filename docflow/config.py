@@ -105,7 +105,8 @@ class AppConfig:
     # --- раскладка томов по структуре {обозначение}_{дата} ---
     edit_dir: str = "!EDIT"                       # подпапка для редактируемых форматов
     published_dir: str = "!PUBLISHED"             # подпапка для pdf/sig
-    published_extensions: List[str] = field(default_factory=lambda: [".pdf", ".sig"])
+    published_extensions: List[str] = field(
+        default_factory=lambda: [".pdf", ".xml", ".sig"])
     # допускаемые типы для смет/ВОР (в каталоге версии)
     smeta_extensions: List[str] = field(default_factory=lambda: [".pdf", ".xlsx", ".gge", ".gsfx", ".sig"])
     sig_extensions: List[str] = field(default_factory=lambda: [".sig"])  # подписи, не переименовываем
@@ -223,6 +224,7 @@ def load(path: str | None = None) -> AppConfig:
     if cfg.project_root:
         cfg.project_root = os.path.normpath(cfg.project_root)   # без двойных //
     cfg.projects = [os.path.normpath(p) for p in cfg.projects if p]
+    _upgrade_published_extensions(cfg)
     return cfg
 
 
@@ -256,6 +258,14 @@ def settings_dict(cfg: AppConfig) -> dict:
     return d
 
 
+def _upgrade_published_extensions(cfg: AppConfig) -> None:
+    """XML — штатный публикуемый файл комплекта, включая старые настройки."""
+    exts = list(cfg.published_extensions or [])
+    if ".xml" not in {str(ext).lower() for ext in exts}:
+        exts.append(".xml")
+    cfg.published_extensions = exts
+
+
 def apply_settings(cfg: AppConfig, data: dict) -> None:
     """Применить блок настроек к cfg (project_root не трогаем)."""
     for f in PROJECT_FIELDS:
@@ -263,6 +273,7 @@ def apply_settings(cfg: AppConfig, data: dict) -> None:
             setattr(cfg, f, data[f])
     if "sources" in data:
         cfg.sources = [Source(**s) for s in data["sources"]]
+    _upgrade_published_extensions(cfg)
 
 
 def project_settings_path(project_root: str) -> str:
@@ -299,4 +310,5 @@ def load_project_settings(cfg: AppConfig) -> bool:
             setattr(cfg, fld, data[fld])
     if "sources" in data:
         cfg.sources = [Source(**s) for s in data["sources"]]
+    _upgrade_published_extensions(cfg)
     return True

@@ -48,6 +48,25 @@ def test_list_signing_folders_latest_areas(tmp_path):
     assert signmod.list_signing_folders(str(latest), cfg) == ["01_ИИ", "02_ПД"]
 
 
+def test_list_signing_folder_tree_includes_sections_and_volumes(tmp_path):
+    project = tmp_path / "project"
+    pd = project / "4300_ПД"
+    _make_tree(pd)
+    ii_version = (project / "1100_ИИ" / "01_ИГДИ" / "523-ПИР-24-ИГДИ"
+                  / "523-ПИР-24-ИГДИ_260603" / "!PUBLISHED")
+    ii_version.mkdir(parents=True)
+    cfg = AppConfig(project_root=str(project))
+
+    tree = signmod.list_signing_folder_tree(str(project), cfg)
+
+    assert ("4300_ПД", 0) in tree
+    assert (os.path.join("4300_ПД", "01_ПЗ"), 1) in tree
+    assert (os.path.join("4300_ПД", "01_ПЗ", "523-ПИР-24-ПЗ"), 2) in tree
+    assert ("1100_ИИ", 0) in tree
+    assert (os.path.join("1100_ИИ", "01_ИГДИ", "523-ПИР-24-ИГДИ"), 2) in tree
+    assert not any("26060" in path for path, _depth in tree)
+
+
 def test_collect_all_when_selected_none(tmp_path):
     src = tmp_path / "4300_ПД"
     _make_tree(src)
@@ -71,6 +90,18 @@ def test_collect_filters_by_selected_section(tmp_path):
     assert skipped == 0
     assert copied == ["523-ПИР-24-ПЗ_Раздел ПД №1.pdf"]
     assert not (dst / "523-ПИР-24-ИОС1_Раздел ПД №5.pdf").exists()
+
+
+def test_collect_filters_by_selected_volume(tmp_path):
+    src = tmp_path / "4300_ПД"
+    _make_tree(src)
+    dst = tmp_path / "sign"
+    cfg = AppConfig(project_root=str(tmp_path))
+    copied, skipped = signmod.collect_for_signing(
+        cfg, str(src), str(dst),
+        selected_folders=[os.path.join("05_ИОС", "523-ПИР-24-ИОС1")])
+    assert skipped == 0
+    assert copied == ["523-ПИР-24-ИОС1_Раздел ПД №5.pdf"]
 
 
 def test_collect_empty_selection_copies_nothing(tmp_path):

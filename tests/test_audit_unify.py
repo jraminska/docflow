@@ -137,3 +137,37 @@ def test_audit_doc_and_external_share_engine(tmp_path):
     acts_ext = planner.audit_external(cfg, [e])
     assert any(a.check == "doc_base" for a in acts_ext)
     assert any(a.check == "edit_pub" for a in acts_ext)
+
+
+def test_audit_doc_renames_version_folder_with_file_title(tmp_path):
+    cfg = _cfg(tmp_path)
+    e = _entry(
+        oboznachenie="523-ПИР-24-ТХ1", key="ТХ1", razdel="6", short="ТХ",
+        doc_template="523-ПИР-24-ТХ1_Раздел ПД №6 Часть №1.pdf")
+    doc = (tmp_path / "proj" / "4300_ПД" / "06_ТХ"
+           / "523-ПИР-24-ТХ1")
+    bad = doc / "523-ПИР-24-ТХ1_Раздел ПД №6 Часть №1_260727"
+    _mk_version(bad)
+
+    actions = planner._audit_doc(
+        cfg, e, str(doc), "523-ПИР-24", "06_ТХ", True)
+
+    rename = next(a for a in actions if a.kind == planner.RENAME
+                  and a.src == str(bad))
+    assert rename.dst == str(doc / "523-ПИР-24-ТХ1_260727")
+
+
+def test_xml_from_composition_is_valid_in_published_folder(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.published_extensions.append(".xml")
+    e = _entry()
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260727")
+    _mk_version(folder)
+    xml = folder / "!PUBLISHED" / "523-ПИР-24-ПЗ_Раздел ПД №1.xml"
+    xml.write_text("<document/>", encoding="utf-8")
+
+    actions = planner._audit_version_catalog(
+        cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
+
+    assert not any(a.src == str(xml) for a in actions)

@@ -53,21 +53,39 @@ def list_signing_folders(source_root: str, cfg: AppConfig) -> List[str]:
     ``01_ИИ`` (выбор целой области). Служебные ``!*`` не включаются.
     Возвращает отсортированные имена папок (не полные пути).
     """
+    return [path for path, depth in list_signing_folder_tree(source_root, cfg)
+            if depth == 0]
+
+
+def list_signing_folder_tree(source_root: str, cfg: AppConfig) -> List[tuple[str, int]]:
+    """Иерархия доступных для подписания папок: (относительный путь, глубина).
+
+    Обход идёт от комплекта/сервера через 4300_ПД/1100_ИИ, разделы и тома.
+    Служебные папки и каталоги конкретных версий в дерево не включаются:
+    версия является содержимым выбранного тома, а не отдельным пунктом выбора.
+    """
     if not source_root or not os.path.isdir(source_root):
         return []
-    names: List[str] = []
-    try:
-        entries = os.listdir(source_root)
-    except OSError:
-        return []
-    for name in entries:
-        full = os.path.join(source_root, name)
-        if not os.path.isdir(full):
-            continue
-        if _is_special_folder(name, cfg):
-            continue
-        names.append(name)
-    return sorted(names, key=lambda n: n.lower())
+    result: List[tuple[str, int]] = []
+
+    def walk(folder: str, rel_parent: str, depth: int) -> None:
+        try:
+            entries = sorted(os.listdir(folder), key=str.lower)
+        except OSError:
+            return
+        for name in entries:
+            full = os.path.join(folder, name)
+            if not os.path.isdir(full) or _is_special_folder(name, cfg):
+                continue
+            prefix, date = planner.cat_match(name)
+            if prefix and date:
+                continue
+            rel = os.path.join(rel_parent, name) if rel_parent else name
+            result.append((rel, depth))
+            walk(full, rel, depth + 1)
+
+    walk(source_root, "", 0)
+    return result
 
 
 def _newest_versions(root: str, cfg: AppConfig) -> dict:
