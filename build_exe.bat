@@ -21,16 +21,21 @@ echo.
 echo [2/4] Creating local environment (.venv)...
 %PY% -m venv .venv
 if errorlevel 1 (
-  echo Failed to create venv.
-  pause
-  exit /b 1
+  echo Existing environment is invalid. Recreating .venv...
+  if exist ".venv" rmdir /s /q ".venv"
+  %PY% -m venv .venv
+  if errorlevel 1 (
+    echo Failed to create venv.
+    pause
+    exit /b 1
+  )
 )
-call ".venv\Scripts\activate.bat"
+set "VENV_PY=%CD%\.venv\Scripts\python.exe"
 
 echo.
 echo [3/4] Installing dependencies...
-python -m pip install --upgrade pip >nul
-pip install -r requirements.txt pyinstaller
+"%VENV_PY%" -m pip install --upgrade pip >nul
+"%VENV_PY%" -m pip install -r requirements.txt pyinstaller
 if errorlevel 1 (
   echo Install failed.
   pause
@@ -45,7 +50,7 @@ if exist "build" rmdir /s /q "build"
 if exist "dist" rmdir /s /q "dist"
 if exist "__pycache__" rmdir /s /q "__pycache__"
 if exist "docflow\__pycache__" rmdir /s /q "docflow\__pycache__"
-pyinstaller --noconfirm --clean --onefile --windowed --name DocFlow --collect-submodules openpyxl app.py
+"%VENV_PY%" -m PyInstaller --noconfirm --clean --onefile --windowed --name DocFlow --collect-submodules openpyxl app.py
 
 echo.
 if exist "dist\DocFlow.exe" (

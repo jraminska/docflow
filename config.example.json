@@ -18,7 +18,7 @@
   "latest_extensions": [".pdf"],
   "edit_dir": "!EDIT",
   "published_dir": "!PUBLISHED",
-  "published_extensions": [".pdf", ".sig"],
+  "published_extensions": [".pdf", ".xml", ".sig"],
   "smeta_short_codes": ["СМ"],
   "smeta_razdel": "12",
   "use_hash": false,

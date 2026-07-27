@@ -33,6 +33,7 @@ class SigningDialog(tk.Toplevel):
         self.v_sigfolder = tk.StringVar(value=default_sign)
         self.v_sig_target = tk.StringVar(value=cfg.target_pd_abs)
         self._folder_vars: dict[str, tk.BooleanVar] = {}
+        self._folder_children: dict[str, list[str]] = {}
         self._build()
         self.v_src.trace_add("write", lambda *_: self._refresh_folders())
         self._refresh_folders()
@@ -73,52 +74,20 @@ class SigningDialog(tk.Toplevel):
         ttk.Entry(f1, textvariable=self.v_exts, width=24).grid(row=2, column=1, sticky="w",
                                                                padx=6, pady=3)
 
-        # Выбор разделов / областей под источником
-        ttk.Label(f1, text="Разделы для сбора:").grid(row=3, column=0, sticky="nw",
-                                                       padx=6, pady=3)
+        # Выбор разделов и томов в отдельном окне
+        ttk.Label(f1, text="Разделы и тома:").grid(row=3, column=0, sticky="w",
+                                                    padx=6, pady=3)
         fold = ttk.Frame(f1)
-        fold.grid(row=3, column=1, columnspan=2, sticky="nsew", padx=6, pady=3)
-        bar = ttk.Frame(fold)
-        bar.pack(fill="x")
-        ttk.Button(bar, text="Выбрать все",
-                   command=lambda: self._set_all_folders(True)).pack(side="left")
-        ttk.Button(bar, text="Снять все",
-                   command=lambda: self._set_all_folders(False)).pack(side="left", padx=4)
-        self.lbl_folders = ttk.Label(bar, foreground="#666", text="")
+        fold.grid(row=3, column=1, columnspan=2, sticky="w", padx=6, pady=3)
+        ttk.Button(fold, text="Выбрать разделы и тома…",
+                   command=self._open_folder_picker).pack(side="left")
+        self.lbl_folders = ttk.Label(fold, foreground="#666", text="")
         self.lbl_folders.pack(side="left", padx=8)
 
-        outer = ttk.Frame(fold)
-        outer.pack(fill="both", expand=True, pady=(4, 0))
-        self._fold_canvas = tk.Canvas(outer, height=110, highlightthickness=0)
-        sb = ttk.Scrollbar(outer, orient="vertical", command=self._fold_canvas.yview)
-        self._fold_body = ttk.Frame(self._fold_canvas)
-        self._fold_body.bind(
-            "<Configure>",
-            lambda e: self._fold_canvas.configure(scrollregion=self._fold_canvas.bbox("all")))
-        self._fold_win = self._fold_canvas.create_window((0, 0), window=self._fold_body,
-                                                         anchor="nw")
-        self._fold_canvas.configure(yscrollcommand=sb.set)
-        self._fold_canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-
-        def _sync_width(event):
-            self._fold_canvas.itemconfigure(self._fold_win, width=event.width)
-
-        self._fold_canvas.bind("<Configure>", _sync_width)
-
-        def _wheel(e):
-            self._fold_canvas.yview_scroll(int(-e.delta / 120), "units")
-
-        self._fold_canvas.bind("<Enter>",
-                               lambda e: self._fold_canvas.bind_all("<MouseWheel>", _wheel))
-        self._fold_canvas.bind("<Leave>",
-                               lambda e: self._fold_canvas.unbind_all("<MouseWheel>"))
-        self.bind("<Destroy>", lambda e: self._fold_canvas.unbind_all("<MouseWheel>"))
-
         ttk.Label(f1, foreground="#666", wraplength=680, justify="left",
-                  text="Отметьте разделы (01_ПЗ, 05_ИОС…) или области (!LATEST: 02_ПД, "
-                       "01_ИИ). По умолчанию выбраны все. Служебные папки (!ARCHIVE…) "
-                       "не показываются.").grid(
+                  text="Можно выбрать весь комплект, отдельный раздел или конкретные тома. "
+                       "Флажок родительской папки переключает всю вложенную ветку. "
+                       "По умолчанию выбраны все; служебные папки и версии не показываются.").grid(
             row=4, column=0, columnspan=3, sticky="w", padx=6)
 
         ttk.Button(f1, text="📦 Собрать актуальные файлы",
@@ -183,28 +152,121 @@ class SigningDialog(tk.Toplevel):
     def _set_all_folders(self, value: bool):
         for v in self._folder_vars.values():
             v.set(value)
+        self._update_folder_summary()
 
     def _selected_folders(self) -> list[str]:
-        return [name for name, var in self._folder_vars.items() if var.get()]
+        # Родители служат для группового выбора. Сканируем только конечные
+        # выбранные узлы, чтобы одна ветка не обходилась несколько раз.
+        return [path for path, var in self._folder_vars.items()
+                if var.get() and not self._folder_children.get(path)]
+
+    def _folder_changed(self, path: str):
+        value = self._folder_vars[path].get()
+
+        def set_descendants(parent: str):
+            for child in self._folder_children.get(parent, []):
+                self._folder_vars[child].set(value)
+                set_descendants(child)
+
+        set_descendants(path)
+        parent = os.path.dirname(path)
+        while parent and parent in self._folder_vars:
+            children = self._folder_children.get(parent, [])
+            self._folder_vars[parent].set(
+                any(self._folder_vars[child].get() for child in children))
+            parent = os.path.dirname(parent)
+        self._update_folder_summary()
 
     def _refresh_folders(self):
-        for w in self._fold_body.winfo_children():
-            w.destroy()
         self._folder_vars.clear()
+        self._folder_children.clear()
         src = self.v_src.get().strip()
-        names = signmod.list_signing_folders(src, self.cfg) if src else []
-        if not names:
-            msg = ("Нет подпапок-разделов в источнике — будет собран весь корень."
-                   if src and os.path.isdir(src)
-                   else "Укажите существующую папку-источник.")
-            ttk.Label(self._fold_body, text=msg, foreground="#888").pack(anchor="w")
-            self.lbl_folders.configure(text="")
+        nodes = signmod.list_signing_folder_tree(src, self.cfg) if src else []
+        if not nodes:
+            self.lbl_folders.configure(
+                text=("будет собран весь корень"
+                      if src and os.path.isdir(src)
+                      else "укажите существующий источник"))
             return
-        for name in names:
+        paths = {path for path, _depth in nodes}
+        for path, _depth in nodes:
+            parent = os.path.dirname(path)
+            if parent in paths:
+                self._folder_children.setdefault(parent, []).append(path)
+            self._folder_children.setdefault(path, [])
+        for path, _depth in nodes:
             var = tk.BooleanVar(value=True)  # по умолчанию все выбраны
-            self._folder_vars[name] = var
-            ttk.Checkbutton(self._fold_body, text=name, variable=var).pack(anchor="w")
-        self.lbl_folders.configure(text=f"всего: {len(names)}")
+            self._folder_vars[path] = var
+        self._update_folder_summary()
+
+    def _update_folder_summary(self):
+        leaves = sum(not children for children in self._folder_children.values())
+        selected = len(self._selected_folders())
+        self.lbl_folders.configure(
+            text=(f"выбрано конечных папок: {selected} из {leaves}"
+                  if leaves else "нет доступных разделов и томов"))
+
+    def _open_folder_picker(self):
+        if not self._folder_vars:
+            messagebox.showinfo(
+                "Разделы и тома",
+                "В выбранном источнике нет доступных вложенных папок.")
+            return
+        snapshot = {path: var.get() for path, var in self._folder_vars.items()}
+        win = tk.Toplevel(self)
+        win.title("Выбор разделов и томов для подписания")
+        win.geometry("620x560")
+        win.minsize(460, 360)
+        win.transient(self)
+        win.grab_set()
+
+        ttk.Label(
+            win, text="Отметьте весь комплект, отдельные разделы или конкретные тома.",
+            padding=(10, 10, 10, 4)).pack(anchor="w")
+        toolbar = ttk.Frame(win, padding=(10, 4))
+        toolbar.pack(fill="x")
+        ttk.Button(toolbar, text="Выбрать все",
+                   command=lambda: self._set_all_folders(True)).pack(side="left")
+        ttk.Button(toolbar, text="Снять все",
+                   command=lambda: self._set_all_folders(False)).pack(side="left", padx=4)
+
+        outer = ttk.Frame(win, padding=(10, 4))
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas)
+        body.bind("<Configure>",
+                  lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        body_id = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(body_id, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        depths: dict[str, int] = {}
+        for path in self._folder_vars:
+            parent = os.path.dirname(path)
+            depths[path] = depths.get(parent, -1) + 1
+            ttk.Checkbutton(
+                body, text=("    " * depths[path]) + os.path.basename(path),
+                variable=self._folder_vars[path],
+                command=lambda p=path: self._folder_changed(p)).pack(anchor="w")
+
+        def close(apply: bool):
+            if not apply:
+                for path, value in snapshot.items():
+                    self._folder_vars[path].set(value)
+                self._update_folder_summary()
+            win.destroy()
+
+        buttons = ttk.Frame(win, padding=10)
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Отмена",
+                   command=lambda: close(False)).pack(side="right")
+        ttk.Button(buttons, text="Применить",
+                   command=lambda: close(True)).pack(side="right", padx=6)
+        win.protocol("WM_DELETE_WINDOW", lambda: close(False))
 
     # ---- действия ----
     def _do_collect(self):
@@ -232,7 +294,7 @@ class SigningDialog(tk.Toplevel):
         self.v_sigfolder.set(dst)
         sel_note = ""
         if selected is not None:
-            sel_note = f", разделов: {len(selected)}"
+            sel_note = f", выбрано томов/веток: {len(selected)}"
         self._log(f"[Сбор] в «{dst}» скопировано файлов: {len(copied)}"
                   + (f", пропущено дублей: {skipped}" if skipped else "")
                   + sel_note)
