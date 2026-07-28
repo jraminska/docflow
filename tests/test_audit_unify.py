@@ -14,6 +14,7 @@ from docflow.naming import Matcher  # noqa: E402
 from docflow import planner  # noqa: E402
 from docflow import scanner  # noqa: E402
 from docflow import transfer as transfermod  # noqa: E402
+from docflow import signing  # noqa: E402
 
 
 def _entry(**kw) -> RegEntry:
@@ -308,3 +309,42 @@ def test_build_plan_reports_missing_signature_on_4300_server(tmp_path):
     assert len(missing) == 1
     assert missing[0].level == "error"
     assert "Раминская" in missing[0].reason
+
+
+def test_signature_name_accepts_full_name_and_extension_positions():
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    signer = "Раминская Юлия Александровна"
+
+    assert signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗ_Раздел ПД №1.pdf_Раминская Юлия Александровна.sig")
+    assert signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗ_Раздел ПД №1_Раминская Юлия Александровна.pdf.sig")
+    assert signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗ Раздел ПД №1 РАМИНСКАЯ_ЮЛИЯ.pdf.sig")
+    assert not signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗУ_Раздел ПД №2.pdf_Раминская.sig")
+    assert not signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗ_Раздел ПД №1.pdf_Иванов.sig")
+
+
+def test_signature_matching_is_not_limited_to_pdf(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(
+        signers=["Раминская Юлия Александровна"],
+        extensions=[".xml", ".sig"])
+    folder = tmp_path / "xml-version"
+    folder.mkdir()
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.xml"
+    (folder / filename).write_text("<xml/>", encoding="utf-8")
+    (folder / "523-ПИР-24-ПЗ_Раздел ПД №1_Раминская Юлия.xml.sig").write_bytes(
+        b"sig")
+
+    missing = signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg)
+
+    assert missing == []

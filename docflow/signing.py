@@ -39,6 +39,27 @@ def _normalized_person(value) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).casefold().replace("ё", "е")
 
 
+def _name_tokens(value: str) -> List[str]:
+    """Слова имени без влияния регистра, пробелов, точек и подчёркиваний."""
+    normalized = str(value or "").casefold().replace("ё", "е")
+    return re.findall(r"[0-9a-zа-я]+", normalized)
+
+
+def _signature_matches(filename: str, signer, signature_name: str) -> bool:
+    """Подпись начинается с основы документа, содержит фамилию и оканчивается .sig."""
+    if not signature_name.casefold().endswith(".sig"):
+        return False
+    stem = os.path.splitext(filename)[0]
+    document_tokens = _name_tokens(stem)
+    signature_tokens = _name_tokens(signature_name[:-4])
+    surname = _normalized_person(signer).split(" ", 1)[0]
+    surname_tokens = _name_tokens(surname)
+    if not document_tokens or not surname_tokens:
+        return False
+    return (signature_tokens[:len(document_tokens)] == document_tokens
+            and surname_tokens[0] in signature_tokens[len(document_tokens):])
+
+
 def missing_required_signatures(entry: RegEntry, version_folder: str,
                                 cfg: AppConfig) -> List[dict]:
     """Недостающие ЭЦП для публикуемых файлов каталога версии.
@@ -91,7 +112,7 @@ def _missing_required_signatures_in_folders(entry: RegEntry, folders,
                 if os.path.isfile(os.path.join(folder, n)))
         except OSError:
             continue
-    normalized_names = {_normalized_person(n) for n in names}
+    signature_names = [n for n in names if n.casefold().endswith(".sig")]
     allowed = {x.lower() for x in (entry.extensions or cfg.published_extensions)}
     sig_exts = {x.lower() for x in cfg.sig_extensions}
     documents = [n for n in names
@@ -103,19 +124,10 @@ def _missing_required_signatures_in_folders(entry: RegEntry, folders,
         for signer in signers:
             full = _normalized_person(signer)
             surname = full.split(" ", 1)[0]
-            aliases = {full, surname}
-            expected = []
-            found = False
-            for alias in aliases:
-                variants = [
-                    f"{filename}_{alias}.sig",
-                    f"{stem}_{alias}{ext}.sig",
-                    f"{stem}_{alias}.sig",
-                ]
-                expected.extend(variants)
-                if any(_normalized_person(v) in normalized_names for v in variants):
-                    found = True
-                    break
+            expected = [f"{filename}_{surname}.sig"]
+            found = any(
+                _signature_matches(filename, signer, sig_name)
+                for sig_name in signature_names)
             if not found:
                 missing.append({
                     "file": filename,
