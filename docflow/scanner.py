@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
 
@@ -144,9 +145,18 @@ def load_snapshot(path: str) -> Dict[str, dict]:
 
 def save_snapshot(path: str, files: List[FileRec]) -> None:
     import datetime
-    from .config import unhide_file
+    from .config import hide_file, unhide_file
     data = {"saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "files": [asdict(r) for r in files]}
-    unhide_file(path)                    # на случай, если файл был скрыт прошлой версией
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".docflow_state_", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        unhide_file(path)
+        os.replace(tmp, path)
+        hide_file(path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)

@@ -45,3 +45,12 @@ def test_ui_app_imports_transfermod():
     import ui.app as app_mod
     assert hasattr(app_mod, "transfermod")
     assert callable(app_mod.transfermod.external_sources)
+
+
+def test_snapshot_save_is_atomic_and_loadable(tmp_path):
+    path = tmp_path / ".docflow_state.json"
+    rec = scanner.FileRec(path="x", rel="x", source="s", category="ПД",
+                          size=1, mtime=1.0, name="x")
+    scanner.save_snapshot(str(path), [rec])
+    assert scanner.load_snapshot(str(path))["x"]["size"] == 1
+    assert not list(tmp_path.glob(".docflow_state_*.tmp"))

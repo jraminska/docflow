@@ -159,7 +159,7 @@ class App(tk.Tk):
     def _structure_path(self) -> str:
         return os.path.join(self._proj_dir(), "project_structure.json")
 
-    # ЛИЧНЫЕ файлы (снимок изменений, журнал отмены) — в %APPDATA%\DocFlow,
+    # ЛИЧНЫЙ журнал отмены — в %APPDATA%\DocFlow,
     # по подпапке на проект. Не зависят от того, где лежит .exe.
     def _local_dir(self) -> str:
         import hashlib
@@ -171,6 +171,8 @@ class App(tk.Tk):
         return d
 
     def _state_path(self) -> str:
+        if self.cfg.project_root:
+            return os.path.join(self.cfg.project_root, ".docflow_state.json")
         return os.path.join(self._local_dir(), "state.json")
 
     def _journal_path(self) -> str:

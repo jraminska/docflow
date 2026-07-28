@@ -105,10 +105,12 @@ class LatestDialog(tk.Toplevel):
                                 "Нажмите «🔒 Зафиксировать CRC».")
             return
         ch, rm, ad = res["changed"], res["removed"], res["added"]
+        stats = (f"\n\nИз общего кэша: {res.get('reused', 0)}; "
+                 f"CRC пересчитан: {res.get('hashed', 0)}.")
         if not (ch or rm or ad):
             messagebox.showinfo("Контроль целостности",
                                 "✓ !LATEST не менялся — все файлы совпадают с "
-                                "зафиксированными CRC32.")
+                                "зафиксированными CRC32." + stats)
             return
 
         def _lst(t, lst):
@@ -118,7 +120,7 @@ class LatestDialog(tk.Toplevel):
             "⚠ Целостность нарушена",
             "В !LATEST изменились файлы относительно зафиксированных CRC32:"
             + _lst("ПЕРЕЗАПИСАНЫ (другое содержимое)", ch)
-            + _lst("УДАЛЕНЫ", rm) + _lst("ДОБАВЛЕНЫ", ad))
+            + _lst("УДАЛЕНЫ", rm) + _lst("ДОБАВЛЕНЫ", ad) + stats)
 
     def _compare(self):
         self.lbl.config(text="Сравнение…")

@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import zlib
+from datetime import datetime
 from typing import List, Optional, Tuple
 
 from . import planner
@@ -125,42 +127,94 @@ def _fileset_crc(folder: str, cfg: AppConfig) -> dict:
 
 CRC_MANIFEST = ".docflow_crc.json"
 
+def _manifest_crc(value):
+    return value.get("crc") if isinstance(value, dict) else value
+
+
+def _load_crc_manifest(path: str) -> dict:
+    import json
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f).get("files", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _atomic_write_crc_manifest(path: str, files: dict) -> None:
+    import json
+    from .config import hide_file, unhide_file
+    folder = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".docflow_crc_", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"version": 2,
+                       "saved_at": datetime.now().isoformat(timespec="seconds"),
+                       "files": files}, f, ensure_ascii=False, indent=2)
+        unhide_file(path)
+        os.replace(tmp, path)
+        hide_file(path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def _fileset_crc_meta(folder: str, cfg: AppConfig, previous=None,
+                      reuse: bool = True) -> tuple:
+    previous = previous or {}
+    out, reused, hashed = {}, 0, 0
+    for dp, _dns, fns in os.walk(folder):
+        for fn in fns:
+            if fn.lower() == CRC_MANIFEST.lower() or planner._ignored(fn, cfg):
+                continue
+            full = os.path.join(dp, fn)
+            rel = os.path.relpath(full, folder).replace("\\", "/").lower()
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            old = previous.get(rel)
+            if (reuse and isinstance(old, dict)
+                    and old.get("size") == st.st_size
+                    and old.get("mtime_ns") == st.st_mtime_ns
+                    and old.get("crc") is not None):
+                crc = old["crc"]
+                reused += 1
+            else:
+                crc = _crc32(full)
+                hashed += 1
+            out[rel] = {"crc": crc, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    return out, reused, hashed
+
 
 def fix_crc(cfg: AppConfig, root: str) -> int:
     """Зафиксировать CRC32 всех файлов в папке (записать .docflow_crc.json).
     Используется для !LATEST и субподрядных папок — чтобы потом ловить перезапись."""
-    import json
     if not root or not os.path.isdir(root):
         return 0
-    fs = _fileset_crc(root, cfg)
-    fs.pop(CRC_MANIFEST.lower(), None)
+    fs, _reused, _hashed = _fileset_crc_meta(root, cfg, reuse=False)
     p = os.path.join(root, CRC_MANIFEST)
-    from .config import hide_file, unhide_file
-    unhide_file(p)
-    with open(p, "w", encoding="utf-8") as f:
-        json.dump({"files": fs}, f, ensure_ascii=False, indent=2)
-    hide_file(p)
+    _atomic_write_crc_manifest(p, fs)
     return len(fs)
 
 
 def verify_crc(cfg: AppConfig, root: str):
     """Сверить текущие CRC32 с зафиксированными. Возвращает
     {changed, removed, added} (списки путей) или None, если фиксации нет."""
-    import json
     p = os.path.join(root, CRC_MANIFEST)
     if not os.path.exists(p):
         return None
-    try:
-        with open(p, encoding="utf-8") as f:
-            old = json.load(f).get("files", {})
-    except (OSError, ValueError):
+    old = _load_crc_manifest(p)
+    if not old:
         return None
-    now = _fileset_crc(root, cfg)
-    now.pop(CRC_MANIFEST.lower(), None)
-    changed = sorted(k for k in now if k in old and now[k] != old[k])
+    now, reused, hashed = _fileset_crc_meta(root, cfg, old, reuse=True)
+    changed = sorted(k for k in now if k in old
+                     and now[k]["crc"] != _manifest_crc(old[k]))
     removed = sorted(k for k in old if k not in now)
     added = sorted(k for k in now if k not in old)
-    return {"changed": changed, "removed": removed, "added": added}
+    if not (changed or removed or added):
+        _atomic_write_crc_manifest(p, now)
+    return {"changed": changed, "removed": removed, "added": added,
+            "reused": reused, "hashed": hashed}
 
 
 def _server_version_folder(entry: RegEntry, cfg: AppConfig, date: str) -> Optional[str]:
