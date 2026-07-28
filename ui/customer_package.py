@@ -11,9 +11,10 @@ from docflow import signing
 
 
 class CustomerPackageDialog(tk.Toplevel):
-    def __init__(self, parent, cfg):
+    def __init__(self, parent, cfg, entries=None):
         super().__init__(parent)
         self.cfg = cfg
+        self.entries = entries or []
         self.title("Комплект для передачи заказчику")
         self.geometry("760x650")
         self.minsize(620, 480)
@@ -152,7 +153,8 @@ class CustomerPackageDialog(tk.Toplevel):
     def _worker(self, target, selected):
         try:
             result = package.build_package(
-                self.cfg, self.cfg.latest_abs, target, selected)
+                self.cfg, self.cfg.latest_abs, target, selected,
+                entries=self.entries)
             self.after(0, lambda r=result: self._done(r))
         except Exception as exc:  # noqa: BLE001
             self.after(0, lambda m=str(exc): self._failed(m))

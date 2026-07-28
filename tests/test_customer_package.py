@@ -12,6 +12,7 @@ if ROOT not in sys.path:
 
 from docflow.config import AppConfig  # noqa: E402
 from docflow import customer_package  # noqa: E402
+from docflow.registry import RegEntry  # noqa: E402
 
 
 def test_customer_package_preserves_structure_and_creates_crc_registry(tmp_path):
@@ -29,10 +30,18 @@ def test_customer_package_preserves_structure_and_creates_crc_registry(tmp_path)
     (archive / "old.pdf").write_bytes(b"old")
     target = tmp_path / "customer"
     cfg = AppConfig(project_root=str(tmp_path), latest_dir="!LATEST")
+    entries = [RegEntry(
+        oboznachenie="523-ПИР-24-ПЗ",
+        key="ПЗ",
+        section="01_ПЗ",
+        name="Раздел 1. Пояснительная записка",
+        signers=["Иванов Иван Иванович"],
+    )]
 
     result = customer_package.build_package(
         cfg, str(source), str(target),
-        selected_folders=[os.path.join("02_ПД", "01_ПЗ", "523-ПИР-24-ПЗ")])
+        selected_folders=[os.path.join("02_ПД", "01_ПЗ", "523-ПИР-24-ПЗ")],
+        entries=entries)
 
     assert result["files"] == 2
     copied = target / "02_ПД" / "01_ПЗ" / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728"
@@ -44,9 +53,16 @@ def test_customer_package_preserves_structure_and_creates_crc_registry(tmp_path)
     ws = wb["Реестр"]
     assert ws.freeze_panes == "A6"
     assert len(ws.tables) == 1
-    names = [ws.cell(row, 4).value for row in range(6, ws.max_row + 1)]
+    names = [ws.cell(row, 6).value for row in range(6, ws.max_row + 1)]
     assert names == ["note.xml", "note.xml_Иванов.sig"]
     crc_row = names.index("note.xml") + 6
-    assert ws.cell(crc_row, 7).value == f"{zlib.crc32(content) & 0xFFFFFFFF:08X}"
-    assert ws.cell(crc_row, 9).hyperlink is not None
+    assert ws.cell(crc_row, 3).value == "523-ПИР-24-ПЗ"
+    assert ws.cell(crc_row, 4).value == "Раздел 1. Пояснительная записка"
+    assert ws.cell(crc_row, 5).value == "260728"
+    assert ws.cell(crc_row, 8).value == "Требуются: Иванов Иван Иванович"
+    assert ws.cell(crc_row, 11).value == f"{zlib.crc32(content) & 0xFFFFFFFF:08X}"
+    assert ws.cell(crc_row, 12).hyperlink is not None
+    signature_row = names.index("note.xml_Иванов.sig") + 6
+    assert ws.cell(signature_row, 7).value == "Подпись"
+    assert ws.cell(signature_row, 8).value == "Иванов Иван Иванович"
     wb.close()

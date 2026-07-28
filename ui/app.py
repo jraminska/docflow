@@ -681,7 +681,7 @@ class App(tk.Tk):
             messagebox.showwarning(
                 "!LATEST", "Сначала сформируйте комплект !LATEST.")
             return
-        CustomerPackageDialog(self, self.cfg)
+        CustomerPackageDialog(self, self.cfg, self.entries)
 
     def do_transfer(self):
         if self._busy:
