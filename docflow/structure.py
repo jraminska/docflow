@@ -13,6 +13,7 @@ Excel после этого нужен только при изменении с
         { "oboznachenie": "523-ПИР-24-ПЗ", "short": "ПЗ",
           "razdel": "1", "podrazdel": "", "chast": "",
           "name": "Раздел 1. Пояснительная записка",
+          "signers": ["Иванов", "Раминская Юлия Александровна"],
           "smeta": false,
           "doc_template": "523-ПИР-24-ПЗ_Раздел ПД №1_ггммдд.pdf",
           "iul_template": "523-ПИР-24-ПЗ_Раздел ПД №1_ггммдд_УЛ.pdf" }
@@ -57,6 +58,7 @@ def build_from_entries(entries: List[RegEntry], shifr: str = "",
             "razdel": str(e.razdel or ""), "podrazdel": str(e.podrazdel or ""),
             "chast": str(e.chast or ""), "tom": str(e.tom or ""),
             "name": e.name, "smeta": is_smeta,
+            "signers": list(e.signers or []),
             "extensions": list(smeta_ext if sub else pub_ext),  # допускаемые типы
             # деление каталога версии на ред./публ. (сметы — без деления, одной папкой)
             "split": not is_smeta, "edit_dir": edit_dir, "pub_dir": pub_dir,
@@ -92,6 +94,7 @@ def build_ii_sections(ii_root_abs: str, ii_types, proj_shifr: str = "",
         return {"oboznachenie": oboz, "short": short, "section": secname, "area": "ИИ",
                 "razdel": "", "podrazdel": "", "chast": "",
                 "name": f"Инженерные изыскания — {strip_proj_prefix(oboz)}",
+                "signers": [],
                 "smeta": False, "extensions": list(pub_ext), "split": True,
                 "edit_dir": edit_dir, "pub_dir": pub_dir,
                 "doc_template": "", "iul_template": ""}
@@ -152,6 +155,7 @@ def to_entries(structure: dict) -> List[RegEntry]:
                     doc_template=d.get("doc_template", ""),
                     iul_template=d.get("iul_template", ""),
                     extensions=list(d.get("extensions", [])),
+                    signers=list(d.get("signers", [])),
                     area=d.get("area", "ПД"), section=d.get("section", ""),
                     split=bool(d.get("split", not d.get("smeta", False))),
                     edit_dir=d.get("edit_dir", ""), pub_dir=d.get("pub_dir", ""),

@@ -171,3 +171,49 @@ def test_xml_from_composition_is_valid_in_published_folder(tmp_path):
         cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
 
     assert not any(a.src == str(xml) for a in actions)
+
+
+def test_audit_reports_each_missing_required_signature(tmp_path):
+    cfg = _cfg(tmp_path)
+    e = _entry(signers=["Иванов", "Раминская Юлия Александровна"])
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    _mk_version(folder, pub_pdf=filename)
+    (folder / "!PUBLISHED" / f"{filename}_Иванов.sig").write_bytes(b"sig")
+
+    actions = planner._audit_version_catalog(
+        cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
+    missing = [a for a in actions if a.check == "missing_signatures"]
+
+    assert len(missing) == 1
+    assert "Раминская Юлия Александровна" in missing[0].reason
+    assert "Иванов" not in missing[0].reason
+
+
+def test_audit_accepts_signer_before_document_extension(tmp_path):
+    cfg = _cfg(tmp_path)
+    e = _entry(signers=["Раминская Юлия Александровна"])
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    _mk_version(folder, pub_pdf=filename)
+    (folder / "!PUBLISHED" /
+     "523-ПИР-24-ПЗ_Раздел ПД №1_Раминская.pdf.sig").write_bytes(b"sig")
+
+    actions = planner._audit_version_catalog(
+        cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
+
+    assert not any(a.check == "missing_signatures" for a in actions)
+
+
+def test_structure_reads_signers_from_project_composition():
+    from docflow import structure
+
+    data = {"sections": [{"documents": [{
+        "oboznachenie": "523-ПИР-24-ПЗ", "razdel": "1", "short": "ПЗ",
+        "signers": ["Иванов", "Петров"]}]}]}
+
+    entry = structure.to_entries(data)[0]
+
+    assert entry.signers == ["Иванов", "Петров"]

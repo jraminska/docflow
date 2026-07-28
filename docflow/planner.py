@@ -515,6 +515,15 @@ def _audit_version_catalog(cfg: AppConfig, e: RegEntry, folder: str, proj: str,
                                           [os.path.join(folder, edit_dir),
                                            os.path.join(folder, pub_dir)]),
                                   check=("edit_pub" if same_dir else "loose_files")))
+    if do_files and _check(cfg, "missing_signatures") and getattr(e, "signers", None):
+        from .signing import missing_required_signatures
+        for item in missing_required_signatures(e, folder, cfg):
+            out.append(Action(
+                FLAG, os.path.join(item["folder"], item["file"]),
+                selected=False, node=folder, group=group, key=e.key,
+                reason=f"{e.key}: нет подписи ЭЦП «{item['signer']}» к файлу "
+                       f"{item['file']}",
+                check="missing_signatures"))
     return out
 
 
@@ -616,6 +625,8 @@ def _issues_from_audit_actions(actions: List[Action], entry: RegEntry,
                     issues.append(f"нет папки {name}")
         elif a.kind == MOVE and a.check in ("loose_files", "edit_pub"):
             loose_names.append(os.path.basename(a.src))
+        elif a.check == "missing_signatures" and a.reason:
+            issues.append(a.reason)
     if loose_names:
         uniq = list(dict.fromkeys(loose_names))
         issues.append(f"файлы вне {pub_dir}/{edit_dir}: " + ", ".join(uniq[:3]))
