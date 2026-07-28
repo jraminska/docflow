@@ -123,7 +123,16 @@ def _missing_required_signatures_in_folders(entry: RegEntry, folders,
     is_pz = str(getattr(entry, "short", "") or "").strip().upper() == "ПЗ"
     xml_documents = [
         n for n in documents if os.path.splitext(n)[1].lower() == ".xml"]
-    if is_pz and xml_documents:
+    if is_pz:
+        if not xml_documents:
+            return [{
+                "file": "",
+                "signer": "",
+                "expected": "",
+                "folder": report_folder,
+                "reason": "ПЗ: отсутствует подписываемый файл XML",
+                "level": "warn",
+            }]
         documents = xml_documents
     missing: List[dict] = []
     for filename in documents:

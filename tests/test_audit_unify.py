@@ -177,7 +177,7 @@ def test_xml_from_composition_is_valid_in_published_folder(tmp_path):
 
 def test_audit_reports_each_missing_required_signature(tmp_path):
     cfg = _cfg(tmp_path)
-    e = _entry(signers=["Иванов", "Раминская Юлия Александровна"])
+    e = _entry(signers=["Иванов", "Раминская Юлия Александровна"], short="АР")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
@@ -195,7 +195,7 @@ def test_audit_reports_each_missing_required_signature(tmp_path):
 
 def test_audit_accepts_signer_before_document_extension(tmp_path):
     cfg = _cfg(tmp_path)
-    e = _entry(signers=["Раминская Юлия Александровна"])
+    e = _entry(signers=["Раминская Юлия Александровна"], short="АР")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
@@ -229,12 +229,12 @@ def test_signature_completeness_can_be_disabled_or_made_critical(tmp_path):
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     _mk_version(folder, pub_pdf="523-ПИР-24-ПЗ_Раздел ПД №1.pdf")
 
-    initial = _entry(signers=["Иванов", "Петров"], signature_level="none")
+    initial = _entry(signers=["Иванов", "Петров"], signature_level="none", short="АР")
     initial_actions = planner._audit_version_catalog(
         cfg, initial, str(folder), "523-ПИР-24", "01_ПЗ", True)
     assert not any(a.check == "missing_signatures" for a in initial_actions)
 
-    final = _entry(signers=["Иванов", "Петров"], signature_level="error")
+    final = _entry(signers=["Иванов", "Петров"], signature_level="error", short="АР")
     final_actions = planner._audit_version_catalog(
         cfg, final, str(folder), "523-ПИР-24", "01_ПЗ", True)
     missing = [a for a in final_actions if a.check == "missing_signatures"]
@@ -244,7 +244,7 @@ def test_signature_completeness_can_be_disabled_or_made_critical(tmp_path):
 
 def test_signature_completeness_defaults_to_warning(tmp_path):
     cfg = _cfg(tmp_path)
-    e = _entry(signers=["Иванов"])
+    e = _entry(signers=["Иванов"], short="АР")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     _mk_version(folder, pub_pdf="523-ПИР-24-ПЗ_Раздел ПД №1.pdf")
@@ -260,7 +260,7 @@ def test_signature_completeness_defaults_to_warning(tmp_path):
 def test_global_signature_error_elevates_document_warning(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.check_levels["missing_signatures"] = "error"
-    e = _entry(signers=["Иванов"], signature_level="warn")
+    e = _entry(signers=["Иванов"], signature_level="warn", short="АР")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     _mk_version(folder, pub_pdf="523-ПИР-24-ПЗ_Раздел ПД №1.pdf")
@@ -275,7 +275,7 @@ def test_global_signature_error_elevates_document_warning(tmp_path):
 
 def test_audit_finds_signature_in_version_root_before_published(tmp_path):
     cfg = _cfg(tmp_path)
-    e = _entry(signers=["Овечкин"])
+    e = _entry(signers=["Овечкин"], short="АР")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
@@ -292,7 +292,9 @@ def test_audit_finds_signature_in_version_root_before_published(tmp_path):
 
 def test_build_plan_reports_missing_signature_on_4300_server(tmp_path):
     cfg = _cfg(tmp_path)
-    entry = _entry(signers=["Раминская"], signature_level="error")
+    entry = _entry(
+        signers=["Раминская"], signature_level="error",
+        short="АР", section="01_ПЗ")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / entry.oboznachenie / f"{entry.oboznachenie}_260619")
     filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
@@ -373,7 +375,7 @@ def test_pz_checks_xml_signature_only_when_pdf_and_xml_exist(tmp_path):
         entry, str(folder), cfg) == []
 
 
-def test_pz_falls_back_to_pdf_signature_when_xml_is_absent(tmp_path):
+def test_pz_warns_that_xml_is_absent_instead_of_checking_pdf(tmp_path):
     cfg = _cfg(tmp_path)
     entry = _entry(signers=["Раминская"], extensions=[".pdf", ".xml", ".sig"])
     folder = tmp_path / "pz-version"
@@ -385,4 +387,12 @@ def test_pz_falls_back_to_pdf_signature_when_xml_is_absent(tmp_path):
         entry, str(folder), cfg)
 
     assert len(missing) == 1
-    assert missing[0]["file"] == pdf
+    assert missing[0]["file"] == ""
+    assert missing[0]["level"] == "warn"
+    assert "отсутствует подписываемый файл XML" in missing[0]["reason"]
+
+    actions = planner._signature_actions_for_version(
+        cfg, entry, str(folder), "01_ПЗ")
+    assert len(actions) == 1
+    assert actions[0].level == "warn"
+    assert "отсутствует подписываемый файл XML" in actions[0].reason

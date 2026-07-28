@@ -565,16 +565,21 @@ def _signature_actions_for_version(cfg: AppConfig, e: RegEntry,
             and _check(cfg, "missing_signatures") and getattr(e, "signers", None)):
         from .signing import missing_required_signatures
         for item in missing_required_signatures(e, folder, cfg):
+            reason = item.get("reason") or (
+                f"{e.key}: нет подписи ЭЦП «{item['signer']}» к файлу "
+                f"{item['file']}")
+            src = (os.path.join(item["folder"], item["file"])
+                   if item.get("file") else item["folder"])
+            level = item.get("level") or ("error" if (
+                signature_level == "error"
+                or (cfg.check_levels or {}).get("missing_signatures") == "error"
+            ) else "warn")
             out.append(Action(
-                FLAG, os.path.join(item["folder"], item["file"]),
+                FLAG, src,
                 selected=False, node=folder, group=group, key=e.key,
-                reason=f"{e.key}: нет подписи ЭЦП «{item['signer']}» к файлу "
-                       f"{item['file']}",
+                reason=reason,
                 check="missing_signatures",
-                level=("error" if (
-                    signature_level == "error"
-                    or (cfg.check_levels or {}).get("missing_signatures") == "error"
-                ) else "warn")))
+                level=level))
     return out
 
 
