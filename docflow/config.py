@@ -40,7 +40,7 @@ CHECKS = {
     "foreign_shifr":   "Чужой шифр/год — проверить",
     "foreign_folders": "Посторонние папки (нет в составе)",
     "work_folders":    "Нестандартные (рабочие) папки",
-    "missing_signatures": "Обязательные подписи ЭЦП",
+    "missing_signatures": "Комплектность подписей ЭЦП",
 }
 DEFAULT_CHECKS = {k: True for k in CHECKS}
 
@@ -59,7 +59,7 @@ CHECK_GROUPS = [
 DEFAULT_CHECK_LEVELS = {
     "doc_base": "error", "edit_pub": "error", "archive_place": "warn",
     "version_in_doc": "error", "foreign_shifr": "warn", "foreign_folders": "warn",
-    "work_folders": "warn", "loose_files": "error", "missing_signatures": "error",
+    "work_folders": "warn", "loose_files": "error", "missing_signatures": "warn",
 }
 # Служебные подпапки, которые НЕ являются версиями документации
 SERVICE_DIRS = ["!ARCHIVE", "!EDIT", "!PUBLISHED", "!WORK", "!SUPPORT", "!LINKS",
