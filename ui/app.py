@@ -6,6 +6,7 @@ import re
 import queue
 import threading
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import ttk, filedialog, messagebox
 
 from docflow import config as cfgmod
@@ -214,8 +215,11 @@ class App(tk.Tk):
 
         bar = ttk.Frame(self, padding=(8, 0, 8, 6))
         bar.pack(fill="x")
-        self.btn_scan = ttk.Button(bar, text="🔍 Сканировать", command=self.do_scan)
+        self.btn_scan = ttk.Button(bar, text="⚡ Быстрая проверка", command=self.do_scan)
         self.btn_scan.pack(side="left")
+        self.btn_full_scan = ttk.Button(
+            bar, text="🔍 Полная проверка", command=lambda: self.do_scan(full=True))
+        self.btn_full_scan.pack(side="left", padx=4)
         self.btn_latest = ttk.Button(bar, text="📦 Сформировать !LATEST", command=self.do_latest)
         self.btn_latest.pack(side="left", padx=4)
         self.btn_transfer = ttk.Button(bar, text="📥 Перенести на сервер", command=self.do_transfer)
@@ -513,7 +517,7 @@ class App(tk.Tk):
                 srcs = [cfgmod.Source("Сервер — ПД (авто)", self.cfg.target_pd, "ПД")] + srcs
         return srcs
 
-    def do_scan(self):
+    def do_scan(self, full=False):
         if self._busy:
             return
         if not self.cfg.project_root:
@@ -529,19 +533,26 @@ class App(tk.Tk):
         self._set_busy(True)
         try:
             self.progress.start(12)
-            self.log("── Сканирование начато ──")
-            # сброс UI-состояния только в главном потоке
-            self._scanned = False
-            self.actions = []
-            self._populate()
-            threading.Thread(target=self._scan_worker, daemon=True).start()
+            mode = "полная" if full else "быстрая фоновая"
+            self.log(f"── Проверка начата: {mode} ──")
+            self.lbl_summary.config(
+                text=("🔍 Полная проверка…" if full
+                      else "🔄 Фоновая проверка — показан общий индекс…"),
+                foreground="#1F4E79")
+            if full:
+                self._scanned = False
+                self.actions = []
+                self._populate()
+            threading.Thread(
+                target=self._scan_worker, args=(full,), daemon=True).start()
         except Exception:
             # иначе _busy залипает и повторный «Сканировать» молча ничего не делает
             self.progress.stop()
             self._set_busy(False)
             raise
 
-    def _apply_scan_results(self, entries, inventory, groups_seen, plan):
+    def _apply_scan_results(self, entries, inventory, groups_seen, plan,
+                            final=True):
         """Применить результаты скана в главном потоке UI."""
         self.entries = entries
         self.inventory = inventory
@@ -549,9 +560,14 @@ class App(tk.Tk):
         self.actions = plan
         self._scanned = True
         self._populate()
-        self._summary(plan)
+        if final:
+            self._summary(plan)
+        else:
+            self.lbl_summary.config(
+                text="🔄 Фоновая проверка — показан общий индекс…",
+                foreground="#1F4E79")
 
-    def _scan_worker(self):
+    def _scan_worker(self, full=False):
         try:
             if self.entries:
                 entries = list(self.entries)
@@ -565,20 +581,46 @@ class App(tk.Tk):
 
             matcher = Matcher(entries)
 
+            prev, previous_dirs = scanner.load_snapshot_index(self._state_path())
+            if not full and prev and not self.actions:
+                cached = [scanner.FileRec(**{
+                    k: r.get(k) for k in scanner.FileRec.__dataclass_fields__
+                }) for r in prev.values()]
+                cached_groups = {planner._first_component(r.rel) for r in cached}
+                cached_plan = planner.build_plan(cached, matcher, self.cfg, set())
+                cached_plan.sort(
+                    key=lambda a: (not a.is_change, KIND_ORDER.get(a.kind, 9),
+                                   os.path.basename(a.src).lower()))
+                self.log("Показан общий индекс; актуализация продолжается в фоне.")
+                self.after(
+                    0, lambda e=entries, inv=cached, g=cached_groups, p=cached_plan:
+                    self._apply_scan_results(e, inv, g, p, final=False))
+
             inventory = []
             groups_seen = set()
-            for s in self._scan_sources():
-                path = self.cfg.abspath(s.path)
-                recs = scanner.scan_source(s.name, path, s.category,
-                                           self.cfg.ignore_patterns,
-                                           use_hash=self.cfg.use_hash,
-                                           skip_dirs=self.cfg.scan_skip_dirs + self.cfg.exclude_folders)
-                self.log(f"  • {s.name}: {len(recs)} файлов ({path})")
-                inventory.extend(recs)
-                for r in recs:
-                    groups_seen.add(planner._first_component(r.rel))
+            directory_index = {}
+            sources = self._scan_sources()
+            skip_dirs = self.cfg.scan_skip_dirs + self.cfg.exclude_folders
 
-            prev = scanner.load_snapshot(self._state_path())
+            def scan_one(s):
+                path = self.cfg.abspath(s.path)
+                recs, dirs, reused = scanner.scan_source_incremental(
+                    s.name, path, s.category, self.cfg.ignore_patterns,
+                    prev, ({} if full else previous_dirs),
+                    use_hash=self.cfg.use_hash, skip_dirs=skip_dirs)
+                return s, path, recs, dirs, reused
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = [pool.submit(scan_one, s) for s in sources]
+                for future in as_completed(futures):
+                    s, path, recs, dirs, reused = future.result()
+                    note = f", из индекса {reused}" if not full else ""
+                    self.log(f"  • {s.name}: {len(recs)} файлов{note} ({path})")
+                    inventory.extend(recs)
+                    directory_index.update(dirs)
+                    for r in recs:
+                        groups_seen.add(planner._first_component(r.rel))
+
             changes = scanner.diff(prev, inventory, self.cfg.use_hash)
             changed = {r.path for r in changes.added + changes.modified}
             changed |= {nr.path for _, nr in changes.moved}
@@ -591,7 +633,7 @@ class App(tk.Tk):
                 self.log("Первое сканирование — снимок сохранён для отслеживания изменений.")
 
             plan = planner.build_plan(inventory, matcher, self.cfg, changed)
-            scanner.save_snapshot(self._state_path(), inventory)
+            scanner.save_snapshot(self._state_path(), inventory, directory_index)
 
             plan.sort(key=lambda a: (not a.is_change, KIND_ORDER.get(a.kind, 9),
                                      os.path.basename(a.src).lower()))
@@ -1373,5 +1415,6 @@ class App(tk.Tk):
     def _set_busy(self, b: bool):
         self._busy = b
         state = "disabled" if b else "normal"
-        for w in (self.btn_scan, self.btn_latest, self.btn_apply_sel, self.btn_apply_all):
+        for w in (self.btn_scan, self.btn_full_scan, self.btn_latest,
+                  self.btn_apply_sel, self.btn_apply_all):
             w.config(state=state)

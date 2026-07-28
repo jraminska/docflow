@@ -54,3 +54,29 @@ def test_snapshot_save_is_atomic_and_loadable(tmp_path):
     scanner.save_snapshot(str(path), [rec])
     assert scanner.load_snapshot(str(path))["x"]["size"] == 1
     assert not list(tmp_path.glob(".docflow_state_*.tmp"))
+
+
+def test_incremental_scan_reuses_unchanged_directory(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "a.pdf").write_bytes(b"a")
+    first, dirs, reused = scanner.scan_source_incremental(
+        "source", str(root), "ПД", [], {}, {})
+    assert reused == 0
+
+    previous = {r.path: vars(r) for r in first}
+    second, second_dirs, reused = scanner.scan_source_incremental(
+        "source", str(root), "ПД", [], previous, dirs)
+    assert [r.name for r in second] == ["a.pdf"]
+    assert reused == 1
+    assert second_dirs == dirs
+
+
+def test_snapshot_stores_shared_directory_index(tmp_path):
+    path = tmp_path / ".docflow_state.json"
+    rec = scanner.FileRec(path="x", rel="x", source="s", category="ПД",
+                          size=1, mtime=1.0, name="x")
+    scanner.save_snapshot(str(path), [rec], {"folder": 123})
+    files, directories = scanner.load_snapshot_index(str(path))
+    assert files["x"]["name"] == "x"
+    assert directories == {"folder": 123}
