@@ -332,6 +332,11 @@ class App(tk.Tk):
         self.tree.bind("<space>", self._on_space)
         self.tree.bind("<Double-1>", self._open_location)
         self.tree.bind("<<TreeviewSelect>>", self._on_action_select)
+        self.action_ctx = tk.Menu(self, tearoff=0)
+        self.action_ctx.add_command(
+            label="🚫 Добавить папку замечания в исключения",
+            command=self._exclude_action_folder)
+        self.tree.bind("<Button-3>", self._action_ctx_menu)
         right_pw.add(table_fr, weight=3)
 
         note_fr = ttk.LabelFrame(right_pw, text="Полный текст замечания", padding=4)
@@ -1136,6 +1141,56 @@ class App(tk.Tk):
             self.stree.selection_set(iid)
             self._on_struct_select()
             self.ctx.tk_popup(event.x_root, event.y_root)
+
+    def _action_ctx_menu(self, event):
+        iid = self.tree.identify_row(event.y)
+        if not iid or iid not in self.row_action:
+            return
+        self.tree.selection_set(iid)
+        self._on_action_select()
+        self.action_ctx.tk_popup(event.x_root, event.y_root)
+
+    def _action_exclude_name(self, action) -> str:
+        """Безопасное имя папки для исключения по строке замечания."""
+        node = getattr(action, "node", "")
+        candidate = node or getattr(action, "src", "")
+        if candidate and not node and not os.path.isdir(candidate):
+            candidate = os.path.dirname(candidate)
+        candidate = os.path.normpath(candidate) if candidate else ""
+        service = set(cfgmod.SERVICE_DIRS) | {
+            self.cfg.archive_name, self.cfg.edit_dir, self.cfg.published_dir}
+        while candidate and os.path.basename(candidate) in service:
+            parent = os.path.dirname(candidate)
+            if parent == candidate:
+                break
+            candidate = parent
+        return os.path.basename(candidate.rstrip("/\\")) if candidate else ""
+
+    def _exclude_action_folder(self):
+        sel = self.tree.selection()
+        action = self.row_action.get(sel[0]) if sel else None
+        if action is None:
+            return
+        name = self._action_exclude_name(action)
+        if not name:
+            messagebox.showwarning(
+                "Исключения", "Не удалось определить папку этого замечания.")
+            return
+        if name in self.cfg.exclude_folders:
+            messagebox.showinfo(
+                "Исключения", f"Папка «{name}» уже находится в исключениях.")
+            return
+        if not messagebox.askyesno(
+                "Добавить в исключения",
+                f"Исключить папку «{name}» из дальнейших проверок?\n\n"
+                "Она будет автоматически сохранена в настройках проекта."):
+            return
+        self.cfg.exclude_folders.append(name)
+        self._save_project_settings()
+        cfgmod.save(self.cfg)
+        self.log(f"Папка добавлена в исключения из замечания: {name}")
+        if self.entries:
+            self.do_scan()
 
     def _exclude_node(self):
         sel = self.stree.selection()
