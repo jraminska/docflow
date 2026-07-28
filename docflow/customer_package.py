@@ -62,7 +62,19 @@ def _file_context(rel: str, entry_lookup: dict) -> tuple:
     volume_name = (
         getattr(entry, "name", "") if entry is not None else ""
     ) or designation or (parts[-2] if len(parts) > 1 else "")
-    return entry, section, designation, volume_name, version
+    volume_number = getattr(entry, "tom", "") if entry is not None else ""
+    razdel = getattr(entry, "razdel", "") if entry is not None else ""
+    area = getattr(entry, "area", "") if entry is not None else ""
+    return (
+        entry, section, designation, volume_name, version,
+        volume_number, razdel, area)
+
+
+def _section_title(entry, section: str) -> str:
+    name = (getattr(entry, "name", "") if entry is not None else "").strip()
+    if name:
+        return name.splitlines()[0]
+    return section
 
 
 def _signer_names(entry) -> List[str]:
@@ -112,15 +124,21 @@ def build_package(cfg: AppConfig, source_root: str, target_dir: str,
                 shutil.copy2(src, dst)
                 size = os.path.getsize(dst)
                 crc = _crc32(dst)
-                entry, section, designation, volume_name, version = _file_context(
-                    rel, entry_lookup)
+                (
+                    entry, section, designation, volume_name, version,
+                    volume_number, razdel, area,
+                ) = _file_context(rel, entry_lookup)
                 is_signature = filename.casefold().endswith(".sig")
                 rows.append({
                     "section": section,
+                    "section_title": _section_title(entry, section),
+                    "group_key": f"{area}:{razdel or section}",
                     "designation": designation,
                     "volume_name": volume_name,
+                    "volume_number": volume_number,
                     "version": version,
                     "relative": rel,
+                    "folder": os.path.dirname(rel),
                     "name": filename,
                     "extension": os.path.splitext(filename)[1].lower().lstrip("."),
                     "size": size,
@@ -134,10 +152,11 @@ def build_package(cfg: AppConfig, source_root: str, target_dir: str,
                     progress(copied, rel)
     registry = os.path.join(target_dir, REGISTRY_NAME)
     rows.sort(key=lambda row: (
-        row["section"].casefold(), row["designation"].casefold(),
+        row["group_key"].casefold(), row["designation"].casefold(),
         row["version"], row["name"].casefold().replace(".sig", ""),
         row["kind"] == "Подпись"))
-    _write_registry(registry, rows, source_root)
+    _write_registry(
+        registry, rows, cfg.object_name, planner._project_shifr(entries or []))
     return {
         "target": target_dir,
         "registry": registry,
@@ -147,11 +166,12 @@ def build_package(cfg: AppConfig, source_root: str, target_dir: str,
     }
 
 
-def _write_registry(path: str, rows: Iterable[dict], source_root: str) -> None:
+def _write_registry(
+        path: str, rows: Iterable[dict], project_name: str, project_code: str
+) -> None:
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Alignment, Font, PatternFill
-        from openpyxl.worksheet.table import Table, TableStyleInfo
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     except ImportError as exc:
         raise RuntimeError(
             "Не установлен модуль openpyxl — невозможно создать Excel-реестр."
@@ -159,59 +179,79 @@ def _write_registry(path: str, rows: Iterable[dict], source_root: str) -> None:
     rows = list(rows)
     wb = Workbook()
     ws = wb.active
-    ws.title = "Реестр"
+    ws.title = "Состав"
     ws.sheet_view.showGridLines = False
-    ws.freeze_panes = "A6"
-    ws.merge_cells("A1:L1")
-    ws["A1"] = "РЕЕСТР ПЕРЕДАННОЙ ДОКУМЕНТАЦИИ"
-    ws["A1"].font = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
-    ws["A1"].fill = PatternFill("solid", fgColor="1F4E78")
-    ws["A1"].alignment = Alignment(horizontal="center")
-    ws.merge_cells("A2:L2")
-    ws["A2"] = f"Источник: {source_root}"
-    ws["A3"] = "Сформирован:"
-    ws["B3"] = datetime.now().strftime("%d.%m.%Y %H:%M")
-    ws["D3"] = "Файлов:"
-    ws["E3"] = len(rows)
+    ws.freeze_panes = "A7"
+    ws.merge_cells("B1:G1")
+    ws["A1"] = "Название проекта:"
+    ws["B1"] = project_name or "—"
+    ws.merge_cells("B2:G2")
+    ws["A2"] = "Шифр объекта:"
+    ws["B2"] = project_code or "—"
+    ws.merge_cells("B3:G3")
+    ws["A3"] = "Дата передачи:"
+    ws["B3"] = datetime.now().strftime("%d.%m.%Y")
+    for cell in ("A1", "A2", "A3"):
+        ws[cell].font = Font(name="Arial", size=11, bold=True)
+    for cell in ("B1", "B2", "B3"):
+        ws[cell].font = Font(name="Arial", size=11, bold=True, color="1F4E78")
+        ws[cell].alignment = Alignment(horizontal="left", vertical="center")
     headers = [
-        "№", "Раздел", "Обозначение", "Наименование тома", "Версия",
-        "Имя файла документа / подписи", "Тип", "Подписант / требуемые подписи",
-        "Формат", "Размер, байт", "CRC32", "Путь к файлу"]
+        "Номер тома", "Обозначение", "Наименование", "Версия",
+        "Название файла", "CRC32", "Путь к файлу"]
+    ws.append([])
     ws.append([])
     ws.append(headers)
-    header_row = 5
-    for index, row in enumerate(rows, start=1):
-        excel_row = header_row + index
+    header_row = 6
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    section_fill = PatternFill("solid", fgColor="D9E2F3")
+    thin = Side(style="thin", color="B7B7B7")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for cell in ws[header_row]:
+        cell.fill = header_fill
+        cell.font = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+        cell.alignment = Alignment(
+            horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border
+    ws.row_dimensions[header_row].height = 42
+
+    previous_group = None
+    for row in rows:
+        if row["group_key"] != previous_group:
+            ws.append(["", "", row["section_title"], "", "", "", ""])
+            section_row = ws.max_row
+            for cell in ws[section_row]:
+                cell.fill = section_fill
+                cell.font = Font(
+                    name="Arial", size=10, bold=True, italic=True,
+                    color="44546A")
+                cell.border = border
+            previous_group = row["group_key"]
         ws.append([
-            index, row["section"], row["designation"], row["volume_name"],
-            row["version"], row["name"], row["kind"],
-            row["signer"] or (
-                "Требуются: " + row["required_signers"]
-                if row["required_signers"] else ""),
-            row["extension"].upper(), row["size"], row["crc32"],
-            row["relative"]])
-        link = ws.cell(excel_row, 12)
-        link.hyperlink = row["relative"]
+            row["volume_number"], row["designation"], row["volume_name"],
+            row["version"], row["name"], row["crc32"], row["folder"]])
+        excel_row = ws.max_row
+        link = ws.cell(excel_row, 7)
+        link.hyperlink = row["folder"] or "."
         link.style = "Hyperlink"
-    if rows:
-        table = Table(displayName="TransferredDocuments",
-                      ref=f"A{header_row}:L{header_row + len(rows)}")
-        table.tableStyleInfo = TableStyleInfo(
-            name="TableStyleMedium2", showRowStripes=True,
-            showFirstColumn=False, showLastColumn=False)
-        ws.add_table(table)
+        for cell in ws[excel_row]:
+            cell.font = Font(name="Arial", size=10)
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+            cell.border = border
+        ws.cell(excel_row, 1).alignment = Alignment(
+            horizontal="right", vertical="center")
+        ws.cell(excel_row, 4).alignment = Alignment(
+            horizontal="right", vertical="center")
+        ws.cell(excel_row, 6).number_format = "@"
     widths = {
-        "A": 7, "B": 18, "C": 24, "D": 48, "E": 12, "F": 55,
-        "G": 13, "H": 38, "I": 10, "J": 16, "K": 14, "L": 70}
+        "A": 22, "B": 25, "C": 55, "D": 13,
+        "E": 55, "F": 14, "G": 65}
     for col, width in widths.items():
         ws.column_dimensions[col].width = width
-    for row in ws.iter_rows(min_row=header_row, max_row=ws.max_row):
-        for cell in row:
-            cell.alignment = Alignment(
-                vertical="center", wrap_text=cell.column in (3, 4, 6, 8, 12))
-    for cell in ws["J"][header_row:]:
-        cell.number_format = "#,##0"
-    for cell in ws["K"][header_row:]:
-        cell.number_format = "@"
-    ws.auto_filter.ref = f"A{header_row}:L{max(header_row, ws.max_row)}"
+    ws.auto_filter.ref = f"A{header_row}:G{max(header_row, ws.max_row)}"
+    ws.print_title_rows = f"1:{header_row}"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_orientation = "landscape"
     wb.save(path)

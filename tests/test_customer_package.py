@@ -28,13 +28,17 @@ def test_customer_package_preserves_structure_and_creates_crc_registry(tmp_path)
     (pz / "note.xml_Иванов.sig").write_bytes(b"sig")
     (kr / "drawing.pdf").write_bytes(b"pdf")
     (archive / "old.pdf").write_bytes(b"old")
-    target = tmp_path / "customer"
-    cfg = AppConfig(project_root=str(tmp_path), latest_dir="!LATEST")
+    target = tmp_path / "delivery" / "customer" / "new-folder"
+    cfg = AppConfig(
+        project_root=str(tmp_path),
+        latest_dir="!LATEST",
+        object_name="Тестовый объект")
     entries = [RegEntry(
         oboznachenie="523-ПИР-24-ПЗ",
         key="ПЗ",
         section="01_ПЗ",
         name="Раздел 1. Пояснительная записка",
+        tom="1",
         signers=["Иванов Иван Иванович"],
     )]
 
@@ -50,19 +54,29 @@ def test_customer_package_preserves_structure_and_creates_crc_registry(tmp_path)
     assert not (copied / "!ARCHIVE").exists()
 
     wb = load_workbook(result["registry"])
-    ws = wb["Реестр"]
-    assert ws.freeze_panes == "A6"
-    assert len(ws.tables) == 1
-    names = [ws.cell(row, 6).value for row in range(6, ws.max_row + 1)]
+    ws = wb["Состав"]
+    assert ws.freeze_panes == "A7"
+    assert ws["A1"].value == "Название проекта:"
+    assert ws["B1"].value == "Тестовый объект"
+    assert ws["B2"].value == "523-ПИР-24"
+    assert ws["A3"].value == "Дата передачи:"
+    assert isinstance(ws["B3"].value, str)
+    assert ws["D6"].value == "Версия"
+    assert ws["E6"].value == "Название файла"
+    assert ws["F6"].value == "CRC32"
+    assert ws["G6"].value == "Путь к файлу"
+    names = [ws.cell(row, 5).value for row in range(7, ws.max_row + 1)
+             if ws.cell(row, 5).value]
     assert names == ["note.xml", "note.xml_Иванов.sig"]
-    crc_row = names.index("note.xml") + 6
-    assert ws.cell(crc_row, 3).value == "523-ПИР-24-ПЗ"
-    assert ws.cell(crc_row, 4).value == "Раздел 1. Пояснительная записка"
-    assert ws.cell(crc_row, 5).value == "260728"
-    assert ws.cell(crc_row, 8).value == "Требуются: Иванов Иван Иванович"
-    assert ws.cell(crc_row, 11).value == f"{zlib.crc32(content) & 0xFFFFFFFF:08X}"
-    assert ws.cell(crc_row, 12).hyperlink is not None
-    signature_row = names.index("note.xml_Иванов.sig") + 6
-    assert ws.cell(signature_row, 7).value == "Подпись"
-    assert ws.cell(signature_row, 8).value == "Иванов Иван Иванович"
+    crc_row = next(
+        row for row in range(7, ws.max_row + 1)
+        if ws.cell(row, 5).value == "note.xml")
+    assert ws.cell(crc_row, 1).value == "1"
+    assert ws.cell(crc_row, 2).value == "523-ПИР-24-ПЗ"
+    assert ws.cell(crc_row, 3).value == "Раздел 1. Пояснительная записка"
+    assert ws.cell(crc_row, 4).value == "260728"
+    assert ws.cell(crc_row, 6).value == f"{zlib.crc32(content) & 0xFFFFFFFF:08X}"
+    assert ws.cell(crc_row, 7).hyperlink is not None
+    assert ws.cell(crc_row, 7).hyperlink.target.endswith(
+        os.path.join("523-ПИР-24-ПЗ", "523-ПИР-24-ПЗ_260728"))
     wb.close()
