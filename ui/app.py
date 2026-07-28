@@ -667,6 +667,11 @@ class App(tk.Tk):
     def _severity(self, a) -> int:
         """0 — ок, 1 — замечание (жёлтый), 2 — ошибка (красный).
         Берётся из настроек значимости проверки; иначе — по типу действия."""
+        action_level = getattr(a, "level", "")
+        if action_level == "error":
+            return 2
+        if action_level == "warn":
+            return 1
         cid = getattr(a, "check", "")
         if cid:
             lvl = (self.cfg.check_levels or {}).get(cid)

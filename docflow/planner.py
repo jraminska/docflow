@@ -124,6 +124,7 @@ class Action:
     node: str = ""          # абсолютный путь узла дерева, к которому привязано действие
     payload: dict = field(default_factory=dict)      # данные для отдельных видов действий
     check: str = ""         # id проверки, породившей действие (для значимости/фильтра)
+    level: str = ""         # индивидуальная значимость: warn / error
 
     @property
     def title(self) -> str:
@@ -515,7 +516,9 @@ def _audit_version_catalog(cfg: AppConfig, e: RegEntry, folder: str, proj: str,
                                           [os.path.join(folder, edit_dir),
                                            os.path.join(folder, pub_dir)]),
                                   check=("edit_pub" if same_dir else "loose_files")))
-    if do_files and _check(cfg, "missing_signatures") and getattr(e, "signers", None):
+    signature_level = str(getattr(e, "signature_level", "warn") or "warn").lower()
+    if (do_files and signature_level != "none"
+            and _check(cfg, "missing_signatures") and getattr(e, "signers", None)):
         from .signing import missing_required_signatures
         for item in missing_required_signatures(e, folder, cfg):
             out.append(Action(
@@ -523,7 +526,8 @@ def _audit_version_catalog(cfg: AppConfig, e: RegEntry, folder: str, proj: str,
                 selected=False, node=folder, group=group, key=e.key,
                 reason=f"{e.key}: нет подписи ЭЦП «{item['signer']}» к файлу "
                        f"{item['file']}",
-                check="missing_signatures"))
+                check="missing_signatures",
+                level=("error" if signature_level == "error" else "warn")))
     return out
 
 
