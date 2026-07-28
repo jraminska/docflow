@@ -253,3 +253,19 @@ def test_signature_completeness_defaults_to_warning(tmp_path):
 
     assert len(missing) == 1
     assert missing[0].level == "warn"
+
+
+def test_global_signature_error_elevates_document_warning(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.check_levels["missing_signatures"] = "error"
+    e = _entry(signers=["Иванов"], signature_level="warn")
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
+    _mk_version(folder, pub_pdf="523-ПИР-24-ПЗ_Раздел ПД №1.pdf")
+
+    actions = planner._audit_version_catalog(
+        cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
+    missing = [a for a in actions if a.check == "missing_signatures"]
+
+    assert len(missing) == 1
+    assert missing[0].level == "error"

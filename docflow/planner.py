@@ -527,7 +527,10 @@ def _audit_version_catalog(cfg: AppConfig, e: RegEntry, folder: str, proj: str,
                 reason=f"{e.key}: нет подписи ЭЦП «{item['signer']}» к файлу "
                        f"{item['file']}",
                 check="missing_signatures",
-                level=("error" if signature_level == "error" else "warn")))
+                level=("error" if (
+                    signature_level == "error"
+                    or (cfg.check_levels or {}).get("missing_signatures") == "error"
+                ) else "warn")))
     return out
 
 
