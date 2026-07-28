@@ -22,6 +22,8 @@ import json
 import os
 import re
 import shutil
+import xml.etree.ElementTree as ET
+import zlib
 from typing import List, Optional
 
 from . import planner
@@ -33,6 +35,114 @@ from .transfer import crc_diff
 
 LATEST_MANIFEST = ".docflow_latest.json"
 PD_SUB = "02_ПД"
+
+
+def _file_crc32(path: str) -> str:
+    crc = 0
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            crc = zlib.crc32(chunk, crc)
+    return f"{crc & 0xFFFFFFFF:08X}"
+
+
+def _catalog_date_for_path(path: str, stop_root: str) -> Optional[str]:
+    """Дата ближайшего каталога версии над файлом."""
+    current = os.path.dirname(os.path.abspath(path))
+    stop = os.path.abspath(stop_root)
+    while current == stop or current.startswith(stop + os.sep):
+        _prefix, date6 = planner.cat_match(os.path.basename(current))
+        if date6:
+            return date6
+        if current == stop:
+            break
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+def check_explanatory_note_updates(xml_path: str, latest_root: str) -> dict:
+    """Проверить, нужно ли обновлять XML пояснительной записки.
+
+    Имена и CRC32 берутся из элементов ``FileName``/``FileChecksum`` XML.
+    Для каждого упомянутого файла ищется самая свежая копия в ``!LATEST``.
+    Обновление требуется, если каталог найденной копии новее каталога ПЗ
+    либо содержимое файла изменилось при той же версии.
+    """
+    if not os.path.isfile(xml_path):
+        raise FileNotFoundError(f"XML ПЗ не найден: {xml_path}")
+    if not os.path.isdir(latest_root):
+        raise FileNotFoundError(f"Папка !LATEST не найдена: {latest_root}")
+    pz_date = _catalog_date_for_path(xml_path, latest_root)
+    if not pz_date:
+        raise ValueError(
+            "Не удалось определить версию ПЗ: XML должен находиться внутри "
+            "каталога вида {обозначение}_{ггммдд}.")
+
+    root = ET.parse(xml_path).getroot()
+    declared: dict[str, dict] = {}
+    for file_node in root.iter():
+        if file_node.tag.rsplit("}", 1)[-1] not in ("File", "SignFile", "ModelFile"):
+            continue
+        name = checksum = ""
+        for child in file_node.iter():
+            local = child.tag.rsplit("}", 1)[-1]
+            if local == "FileName" and child.text:
+                name = child.text.strip()
+            elif local == "FileChecksum" and child.text:
+                checksum = child.text.strip().upper()
+        if name:
+            declared[name.casefold()] = {"name": name, "checksum": checksum}
+
+    newest: dict[str, dict] = {}
+    wanted = set(declared)
+    for dirpath, dirnames, filenames in os.walk(latest_root):
+        dirnames[:] = [d for d in dirnames if d != "!ARCHIVE"]
+        for filename in filenames:
+            key = filename.casefold()
+            if key not in wanted:
+                continue
+            path = os.path.join(dirpath, filename)
+            version = _catalog_date_for_path(path, latest_root)
+            if not version:
+                continue
+            current = newest.get(key)
+            if current is None or version > current["version"]:
+                newest[key] = {"path": path, "version": version}
+
+    updates = []
+    for key, found in newest.items():
+        item = declared[key]
+        version_newer = found["version"] > pz_date
+        current_crc = ""
+        checksum_changed = False
+        # Более новая дата уже достаточна для вывода. Дорогой CRC32 нужен
+        # только при той же версии — чтобы заметить перезапись файла внутри
+        # существующего каталога, не читая сотни больших PDF/IFC по сети.
+        if found["version"] == pz_date and item["checksum"]:
+            current_crc = _file_crc32(found["path"])
+            checksum_changed = current_crc != item["checksum"]
+        if version_newer or checksum_changed:
+            updates.append({
+                "name": item["name"],
+                "version": found["version"],
+                "path": found["path"],
+                "version_newer": version_newer,
+                "checksum_changed": checksum_changed,
+                "xml_checksum": item["checksum"],
+                "current_checksum": current_crc,
+            })
+    updates.sort(key=lambda row: (row["version"], row["name"].casefold()),
+                 reverse=True)
+    return {
+        "xml_path": xml_path,
+        "pz_version": pz_date,
+        "declared_files": len(declared),
+        "matched_files": len(newest),
+        "needs_update": bool(updates),
+        "updates": updates,
+    }
 
 
 def _latest_sub(entry, cfg: AppConfig) -> str:

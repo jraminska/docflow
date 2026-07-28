@@ -88,6 +88,8 @@ class RegEntry:
     doc_template: str = ""       # ..._ггммдд.pdf
     iul_template: str = ""       # ..._ггммдд_УЛ.pdf
     extensions: List[str] = field(default_factory=list)  # допускаемые типы в !PUBLISHED
+    signers: List[str] = field(default_factory=list)  # обязательные подписанты ЭЦП
+    signature_level: str = "warn"  # none / warn / error
     area: str = "ПД"             # "ПД" или "ИИ" — область документации
     section: str = ""            # явная папка-раздел (для ИИ: 01_ИГДИ); пусто = вычислить
     # имена подпапок каталога версии (по умолчанию берутся из настроек проекта).

@@ -32,6 +32,68 @@ DEFAULT_SIGN_EXTS = [".pdf", ".xml", ".gge"]
 DOC_EXTS = (".pdf", ".xml", ".gge", ".gsfx", ".xlsx", ".docx", ".dwg", ".dwx", ".ods")
 
 
+def _normalized_person(value) -> str:
+    if isinstance(value, dict):
+        value = (value.get("name") or value.get("full_name") or
+                 value.get("surname") or "")
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold().replace("ё", "е")
+
+
+def missing_required_signatures(entry: RegEntry, version_folder: str,
+                                cfg: AppConfig) -> List[dict]:
+    """Недостающие ЭЦП для публикуемых файлов каталога версии.
+
+    Обязательные подписанты берутся из ``entry.signers``. Поддерживаются обе
+    применяемые схемы имён: ``file.pdf_Иванов.sig`` и
+    ``file_Иванов.pdf.sig``. Для полного ФИО также принимается подпись,
+    содержащая только фамилию.
+    """
+    signers = [s for s in (getattr(entry, "signers", None) or [])
+               if _normalized_person(s)]
+    if not signers or not os.path.isdir(version_folder):
+        return []
+    pub_dir = version_folder if planner._loose_catalog(entry, cfg) else os.path.join(
+        version_folder, planner._pub_of(entry, cfg))
+    if not os.path.isdir(pub_dir):
+        return []
+    try:
+        names = [n for n in os.listdir(pub_dir)
+                 if os.path.isfile(os.path.join(pub_dir, n))]
+    except OSError:
+        return []
+    normalized_names = {_normalized_person(n) for n in names}
+    allowed = {x.lower() for x in (entry.extensions or cfg.published_extensions)}
+    sig_exts = {x.lower() for x in cfg.sig_extensions}
+    documents = [n for n in names
+                 if os.path.splitext(n)[1].lower() in allowed - sig_exts
+                 and not planner._ignored(n, cfg)]
+    missing: List[dict] = []
+    for filename in documents:
+        stem, ext = os.path.splitext(filename)
+        for signer in signers:
+            full = _normalized_person(signer)
+            surname = full.split(" ", 1)[0]
+            aliases = {full, surname}
+            expected = []
+            found = False
+            for alias in aliases:
+                variants = [f"{filename}_{alias}.sig", f"{stem}_{alias}{ext}.sig"]
+                expected.extend(variants)
+                if any(_normalized_person(v) in normalized_names for v in variants):
+                    found = True
+                    break
+            if not found:
+                missing.append({
+                    "file": filename,
+                    "signer": (signer if isinstance(signer, str) else
+                               signer.get("name") or signer.get("full_name") or
+                               signer.get("surname") or ""),
+                    "expected": expected[0] if expected else "",
+                    "folder": pub_dir,
+                })
+    return missing
+
+
 # ---------- шаг 1: собрать комплект на подпись ----------
 def _is_special_folder(name: str, cfg: AppConfig) -> bool:
     """Служебные папки (!ARCHIVE, !EDIT, !PUBLISHED …) — не разделы."""

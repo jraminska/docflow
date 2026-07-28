@@ -124,6 +124,7 @@ class Action:
     node: str = ""          # абсолютный путь узла дерева, к которому привязано действие
     payload: dict = field(default_factory=dict)      # данные для отдельных видов действий
     check: str = ""         # id проверки, породившей действие (для значимости/фильтра)
+    level: str = ""         # индивидуальная значимость: warn / error
 
     @property
     def title(self) -> str:
@@ -515,6 +516,18 @@ def _audit_version_catalog(cfg: AppConfig, e: RegEntry, folder: str, proj: str,
                                           [os.path.join(folder, edit_dir),
                                            os.path.join(folder, pub_dir)]),
                                   check=("edit_pub" if same_dir else "loose_files")))
+    signature_level = str(getattr(e, "signature_level", "warn") or "warn").lower()
+    if (do_files and signature_level != "none"
+            and _check(cfg, "missing_signatures") and getattr(e, "signers", None)):
+        from .signing import missing_required_signatures
+        for item in missing_required_signatures(e, folder, cfg):
+            out.append(Action(
+                FLAG, os.path.join(item["folder"], item["file"]),
+                selected=False, node=folder, group=group, key=e.key,
+                reason=f"{e.key}: нет подписи ЭЦП «{item['signer']}» к файлу "
+                       f"{item['file']}",
+                check="missing_signatures",
+                level=("error" if signature_level == "error" else "warn")))
     return out
 
 
@@ -616,6 +629,8 @@ def _issues_from_audit_actions(actions: List[Action], entry: RegEntry,
                     issues.append(f"нет папки {name}")
         elif a.kind == MOVE and a.check in ("loose_files", "edit_pub"):
             loose_names.append(os.path.basename(a.src))
+        elif a.check == "missing_signatures" and a.reason:
+            issues.append(a.reason)
     if loose_names:
         uniq = list(dict.fromkeys(loose_names))
         issues.append(f"файлы вне {pub_dir}/{edit_dir}: " + ", ".join(uniq[:3]))
