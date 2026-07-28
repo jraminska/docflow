@@ -23,6 +23,7 @@ from .constants import (
     DOT_OK, DOT_TODO, DOT_ATTENTION, DOT_UNKNOWN,
     STATUS_TAG, KIND_DOT, app_dir,
 )
+from .customer_package import CustomerPackageDialog
 from .duplicates import DuplicatesDialog
 from .latest import LatestDialog
 from .project import ProjectDialog
@@ -222,6 +223,9 @@ class App(tk.Tk):
         self.btn_full_scan.pack(side="left", padx=4)
         self.btn_latest = ttk.Button(bar, text="📦 Сформировать !LATEST", command=self.do_latest)
         self.btn_latest.pack(side="left", padx=4)
+        self.btn_customer = ttk.Button(
+            bar, text="📤 Комплект заказчику", command=self.do_customer_package)
+        self.btn_customer.pack(side="left", padx=4)
         self.btn_transfer = ttk.Button(bar, text="📥 Перенести на сервер", command=self.do_transfer)
         self.btn_transfer.pack(side="left", padx=4)
         self.btn_sign = ttk.Button(bar, text="✍ Подписание", command=self.do_signing)
@@ -669,6 +673,15 @@ class App(tk.Tk):
                                    "Сначала сформируйте состав проекта (Настройки).")
             return
         LatestDialog(self, self.cfg, self.entries, self._registry_abs())
+
+    def do_customer_package(self):
+        if self._busy:
+            return
+        if not os.path.isdir(self.cfg.latest_abs):
+            messagebox.showwarning(
+                "!LATEST", "Сначала сформируйте комплект !LATEST.")
+            return
+        CustomerPackageDialog(self, self.cfg)
 
     def do_transfer(self):
         if self._busy:
@@ -1416,5 +1429,6 @@ class App(tk.Tk):
         self._busy = b
         state = "disabled" if b else "normal"
         for w in (self.btn_scan, self.btn_full_scan, self.btn_latest,
+                  self.btn_customer,
                   self.btn_apply_sel, self.btn_apply_all):
             w.config(state=state)
