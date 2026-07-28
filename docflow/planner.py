@@ -408,12 +408,47 @@ def build_plan(inventory: List[FileRec],
         if any(p == r or p.startswith(r + os.sep) for p in inv_norm):
             covered.add(r)
     actions.extend(_base_structure_actions(cfg, matcher.entries, covered))
+    actions.extend(audit_server_signatures(cfg, matcher.entries))
     # 4c) аудит субподрядных папок (структура/имена/«нет в составе») — до переноса
     actions.extend(audit_external(cfg, matcher.entries))
 
     # 5) защита от коллизий: если несколько файлов претендуют на одно имя —
     #    не выполняем, а помечаем «требует внимания»
     return _flag_dst_collisions(actions, cfg.sig_extensions)
+
+
+def audit_server_signatures(cfg: AppConfig,
+                            entries: List[RegEntry]) -> List[Action]:
+    """Проверить ЭЦП в активных каталогах версий 4300_ПД.
+
+    Выполняется отдельно от файловой раскладки build_plan: серверные файлы уже
+    обработаны основным циклом, но комплектность подписей пропускать нельзя.
+    """
+    out: List[Action] = []
+    if not _check(cfg, "missing_signatures"):
+        return out
+    for entry in entries:
+        if getattr(entry, "area", "ПД") != "ПД" or not getattr(entry, "signers", None):
+            continue
+        doc = _doc_folder(entry, cfg)
+        if not os.path.isdir(doc):
+            continue
+        try:
+            names = os.listdir(doc)
+        except OSError:
+            continue
+        core = _nospace(strip_proj_prefix(entry.oboznachenie))
+        group = _section_folder(entry, cfg)
+        for name in names:
+            folder = os.path.join(doc, name)
+            if name == cfg.archive_name or not os.path.isdir(folder):
+                continue
+            prefix, date6 = cat_match(name)
+            if (date6 and prefix
+                    and _nospace(strip_proj_prefix(prefix)) == core):
+                out += _signature_actions_for_version(
+                    cfg, entry, folder, group)
+    return out
 
 
 def _flag_dst_collisions(actions: List[Action],
@@ -516,8 +551,17 @@ def _audit_version_catalog(cfg: AppConfig, e: RegEntry, folder: str, proj: str,
                                           [os.path.join(folder, edit_dir),
                                            os.path.join(folder, pub_dir)]),
                                   check=("edit_pub" if same_dir else "loose_files")))
+    if do_files:
+        out += _signature_actions_for_version(cfg, e, folder, group)
+    return out
+
+
+def _signature_actions_for_version(cfg: AppConfig, e: RegEntry,
+                                   folder: str, group: str) -> List[Action]:
+    """Проверка ЭЦП каталога версии независимо от файлового аудита."""
+    out: List[Action] = []
     signature_level = str(getattr(e, "signature_level", "warn") or "warn").lower()
-    if (do_files and signature_level != "none"
+    if (signature_level != "none"
             and _check(cfg, "missing_signatures") and getattr(e, "signers", None)):
         from .signing import missing_required_signatures
         for item in missing_required_signatures(e, folder, cfg):

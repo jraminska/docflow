@@ -535,14 +535,14 @@ class App(tk.Tk):
             self.progress.start(12)
             mode = "полная" if full else "быстрая фоновая"
             self.log(f"── Проверка начата: {mode} ──")
-            self.lbl_summary.config(
-                text=("🔍 Полная проверка…" if full
-                      else "🔄 Фоновая проверка — показан общий индекс…"),
-                foreground="#1F4E79")
             if full:
                 self._scanned = False
                 self.actions = []
                 self._populate()
+            self.lbl_summary.config(
+                text=("🔍 Полная проверка — сканирование файлов…" if full
+                      else "🔄 Фоновая проверка — показан общий индекс…"),
+                foreground="#1F4E79")
             threading.Thread(
                 target=self._scan_worker, args=(full,), daemon=True).start()
         except Exception:

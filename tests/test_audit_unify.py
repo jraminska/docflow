@@ -10,6 +10,7 @@ if ROOT not in sys.path:
 
 from docflow.config import AppConfig, Source, is_ignored  # noqa: E402
 from docflow.registry import RegEntry  # noqa: E402
+from docflow.naming import Matcher  # noqa: E402
 from docflow import planner  # noqa: E402
 from docflow import scanner  # noqa: E402
 from docflow import transfer as transfermod  # noqa: E402
@@ -286,3 +287,24 @@ def test_audit_finds_signature_in_version_root_before_published(tmp_path):
         cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
 
     assert not any(a.check == "missing_signatures" for a in actions)
+
+
+def test_build_plan_reports_missing_signature_on_4300_server(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(signers=["Раминская"], signature_level="error")
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / entry.oboznachenie / f"{entry.oboznachenie}_260619")
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    _mk_version(folder, pub_pdf=filename)
+    pdf = folder / "!PUBLISHED" / filename
+    rec = scanner.FileRec(
+        path=str(pdf), rel=os.path.relpath(pdf, cfg.target_pd_abs),
+        source="Сервер", category="ПД", size=pdf.stat().st_size,
+        mtime=pdf.stat().st_mtime, name=filename)
+
+    actions = planner.build_plan([rec], Matcher([entry]), cfg, {str(pdf)})
+    missing = [a for a in actions if a.check == "missing_signatures"]
+
+    assert len(missing) == 1
+    assert missing[0].level == "error"
+    assert "Раминская" in missing[0].reason
