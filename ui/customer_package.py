@@ -23,8 +23,10 @@ class CustomerPackageDialog(tk.Toplevel):
         self.v_target = tk.StringVar(value=os.path.join(
             cfg.project_root or os.path.expanduser("~"),
             "8300_ВыпускПД", "Комплект_заказчику"))
-        self._vars = {}
+        self._states = {}
         self._children = {}
+        self._items = {}
+        self._paths = {}
         self._build()
         self._load_tree()
 
@@ -53,17 +55,23 @@ class CustomerPackageDialog(tk.Toplevel):
         self.lbl.pack(side="right")
         outer = ttk.Frame(choose)
         outer.pack(fill="both", expand=True)
-        canvas = tk.Canvas(outer, highlightthickness=0)
-        sb = ttk.Scrollbar(outer, command=canvas.yview)
-        self.body = ttk.Frame(canvas)
-        self.body.bind("<Configure>",
-                       lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-        body_id = canvas.create_window((0, 0), window=self.body, anchor="nw")
-        canvas.bind("<Configure>",
-                    lambda e: canvas.itemconfigure(body_id, width=e.width))
-        canvas.configure(yscrollcommand=sb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
+        self.tree = ttk.Treeview(
+            outer, show="tree", selectmode="browse", padding=4)
+        yscroll = ttk.Scrollbar(
+            outer, orient="vertical", command=self.tree.yview)
+        xscroll = ttk.Scrollbar(
+            outer, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(
+            yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.tree.column("#0", width=690, minwidth=380, stretch=True)
+        self.tree.tag_configure("mixed", foreground="#666666")
+        self.tree.bind("<Button-1>", self._tree_click, add=True)
+        self.tree.bind("<space>", self._tree_space, add=True)
+        outer.rowconfigure(0, weight=1)
+        outer.columnconfigure(0, weight=1)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
 
         action = ttk.Frame(self, padding=10)
         action.pack(fill="x")
@@ -91,40 +99,76 @@ class CustomerPackageDialog(tk.Toplevel):
             if parent in paths:
                 self._children.setdefault(parent, []).append(path)
             self._children.setdefault(path, [])
-            self._vars[path] = tk.BooleanVar(value=True)
-        depths = {}
-        for path in self._vars:
+            self._states[path] = True
+        for path, depth in nodes:
             parent = os.path.dirname(path)
-            depths[path] = depths.get(parent, -1) + 1
-            ttk.Checkbutton(
-                self.body,
-                text=("    " * depths[path]) + os.path.basename(path),
-                variable=self._vars[path],
-                command=lambda p=path: self._changed(p)).pack(anchor="w")
+            parent_item = self._items.get(parent, "")
+            item = self.tree.insert(
+                parent_item, "end", text="", open=False)
+            self._items[path] = item
+            self._paths[item] = path
+            self._refresh_item(path)
         self._summary()
 
     def _selected(self):
-        return [p for p, var in self._vars.items()
-                if var.get() and not self._children.get(p)]
+        return [path for path, state in self._states.items()
+                if state is True and not self._children.get(path)]
 
     def _set_all(self, value):
-        for var in self._vars.values():
-            var.set(value)
+        for path in self._states:
+            self._states[path] = value
+            self._refresh_item(path)
         self._summary()
 
-    def _changed(self, path):
-        value = self._vars[path].get()
+    def _set_branch(self, path, value):
+        self._states[path] = value
+        self._refresh_item(path)
         def descendants(parent):
             for child in self._children.get(parent, []):
-                self._vars[child].set(value)
+                self._states[child] = value
+                self._refresh_item(child)
                 descendants(child)
         descendants(path)
         parent = os.path.dirname(path)
-        while parent in self._vars:
-            self._vars[parent].set(any(
-                self._vars[c].get() for c in self._children[parent]))
+        while parent in self._states:
+            child_states = [self._states[c] for c in self._children[parent]]
+            if all(state is True for state in child_states):
+                self._states[parent] = True
+            elif all(state is False for state in child_states):
+                self._states[parent] = False
+            else:
+                self._states[parent] = None
+            self._refresh_item(parent)
             parent = os.path.dirname(parent)
         self._summary()
+
+    def _refresh_item(self, path):
+        state = self._states[path]
+        mark = "☑" if state is True else ("☐" if state is False else "▣")
+        tags = ("mixed",) if state is None else ()
+        self.tree.item(
+            self._items[path],
+            text=f"{mark}  {os.path.basename(path)}",
+            tags=tags)
+
+    def _toggle_item(self, item):
+        path = self._paths.get(item)
+        if path:
+            self._set_branch(path, self._states[path] is not True)
+
+    def _tree_click(self, event):
+        item = self.tree.identify_row(event.y)
+        element = self.tree.identify_element(event.x, event.y)
+        if item and "indicator" not in element:
+            self.tree.after_idle(lambda: self._toggle_item(item))
+            return "break"
+        return None
+
+    def _tree_space(self, _event):
+        item = self.tree.focus()
+        if item:
+            self._toggle_item(item)
+        return "break"
 
     def _summary(self):
         leaves = sum(not children for children in self._children.values())
