@@ -1,8 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
+from docflow import __version__
 
 hiddenimports = []
 hiddenimports += collect_submodules('openpyxl')
+app_name = f'DocFlow-{__version__}'
 hiddenimports += collect_submodules('ui')
 hiddenimports += collect_submodules('docflow')
 
@@ -28,7 +30,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='DocFlow',
+    name=app_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
