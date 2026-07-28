@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
 from unittest import mock
 
@@ -103,3 +104,40 @@ def test_transfer_skips_and_restores_on_replace_failure(tmp_path):
     assert (existing / "x.pdf").read_text(encoding="utf-8") == "old"
     assert not os.path.isdir(bak)
     assert not os.path.isdir(dest + transfermod._TMP_SUFFIX)
+
+
+def test_crc_manifest_is_shared_v2_and_reuses_unchanged_files(tmp_path):
+    root = tmp_path / "!LATEST"
+    root.mkdir()
+    (root / "a.pdf").write_bytes(b"content")
+    cfg = AppConfig(project_root=str(tmp_path))
+
+    assert transfermod.fix_crc(cfg, str(root)) == 1
+    manifest = json.loads((root / transfermod.CRC_MANIFEST).read_text("utf-8"))
+    assert manifest["version"] == 2
+    assert set(manifest["files"]["a.pdf"]) == {"crc", "size", "mtime_ns"}
+
+    with mock.patch.object(transfermod, "_crc32") as crc:
+        result = transfermod.verify_crc(cfg, str(root))
+    crc.assert_not_called()
+    assert result["reused"] == 1
+    assert result["hashed"] == 0
+    assert not result["changed"]
+
+
+def test_crc_verify_rehashes_only_changed_metadata(tmp_path):
+    root = tmp_path / "!LATEST"
+    root.mkdir()
+    (root / "a.pdf").write_bytes(b"first")
+    (root / "b.pdf").write_bytes(b"stable")
+    cfg = AppConfig(project_root=str(tmp_path))
+    transfermod.fix_crc(cfg, str(root))
+
+    (root / "a.pdf").write_bytes(b"new content with another size")
+    real_crc = transfermod._crc32
+    with mock.patch.object(transfermod, "_crc32", wraps=real_crc) as crc:
+        result = transfermod.verify_crc(cfg, str(root))
+    assert crc.call_count == 1
+    assert result["hashed"] == 1
+    assert result["reused"] == 1
+    assert result["changed"] == ["a.pdf"]

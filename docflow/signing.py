@@ -39,6 +39,27 @@ def _normalized_person(value) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).casefold().replace("ё", "е")
 
 
+def _name_tokens(value: str) -> List[str]:
+    """Слова имени без влияния регистра, пробелов, точек и подчёркиваний."""
+    normalized = str(value or "").casefold().replace("ё", "е")
+    return re.findall(r"[0-9a-zа-я]+", normalized)
+
+
+def _signature_matches(filename: str, signer, signature_name: str) -> bool:
+    """Подпись начинается с основы документа, содержит фамилию и оканчивается .sig."""
+    if not signature_name.casefold().endswith(".sig"):
+        return False
+    stem = os.path.splitext(filename)[0]
+    document_tokens = _name_tokens(stem)
+    signature_tokens = _name_tokens(signature_name[:-4])
+    surname = _normalized_person(signer).split(" ", 1)[0]
+    surname_tokens = _name_tokens(surname)
+    if not document_tokens or not surname_tokens:
+        return False
+    return (signature_tokens[:len(document_tokens)] == document_tokens
+            and surname_tokens[0] in signature_tokens[len(document_tokens):])
+
+
 def missing_required_signatures(entry: RegEntry, version_folder: str,
                                 cfg: AppConfig) -> List[dict]:
     """Недостающие ЭЦП для публикуемых файлов каталога версии.
@@ -54,34 +75,92 @@ def missing_required_signatures(entry: RegEntry, version_folder: str,
         return []
     pub_dir = version_folder if planner._loose_catalog(entry, cfg) else os.path.join(
         version_folder, planner._pub_of(entry, cfg))
-    if not os.path.isdir(pub_dir):
+    folders = [pub_dir]
+    if os.path.normpath(pub_dir) != os.path.normpath(version_folder):
+        # В существующих проектах часть подписей лежит прямо в каталоге версии,
+        # даже если для тома настроена !PUBLISHED.
+        folders.append(version_folder)
+    return _missing_required_signatures_in_folders(
+        entry, folders, cfg, pub_dir if os.path.isdir(pub_dir) else version_folder)
+
+
+def missing_required_signatures_in_folder(entry: RegEntry, pub_dir: str,
+                                          cfg: AppConfig) -> List[dict]:
+    """Недостающие подписи в фактической плоской папке публикуемых файлов.
+
+    Используется и для !PUBLISHED, и для каталогов версий внутри !LATEST,
+    куда содержимое !PUBLISHED копируется без дополнительной подпапки.
+    """
+    return _missing_required_signatures_in_folders(
+        entry, [pub_dir], cfg, pub_dir)
+
+
+def _missing_required_signatures_in_folders(entry: RegEntry, folders,
+                                            cfg: AppConfig,
+                                            report_folder: str) -> List[dict]:
+    signers = [s for s in (getattr(entry, "signers", None) or [])
+               if _normalized_person(s)]
+    if not signers:
         return []
-    try:
-        names = [n for n in os.listdir(pub_dir)
-                 if os.path.isfile(os.path.join(pub_dir, n))]
-    except OSError:
-        return []
-    normalized_names = {_normalized_person(n) for n in names}
+    names = []
+    for folder in folders:
+        if not os.path.isdir(folder):
+            continue
+        try:
+            names.extend(
+                n for n in os.listdir(folder)
+                if os.path.isfile(os.path.join(folder, n)))
+        except OSError:
+            continue
+    signature_names = [n for n in names if n.casefold().endswith(".sig")]
     allowed = {x.lower() for x in (entry.extensions or cfg.published_extensions)}
     sig_exts = {x.lower() for x in cfg.sig_extensions}
     documents = [n for n in names
                  if os.path.splitext(n)[1].lower() in allowed - sig_exts
                  and not planner._ignored(n, cfg)]
+    short = str(getattr(entry, "short", "") or "").strip().upper()
+    # Для сметных ССРСС/ВОР/ЛСР/КАЦ и сметной ПЗ подписывается только GGE.
+    smeta_gge_codes = {"ССРСС", "ВОР", "ЛСР", "КАЦ"}
+    requires_gge = (short in smeta_gge_codes
+                    or (short == "ПЗ" and planner._is_smeta(entry, cfg)))
+    gge_documents = [
+        n for n in documents if os.path.splitext(n)[1].lower() == ".gge"]
+    if requires_gge:
+        if not gge_documents:
+            return [{
+                "file": "",
+                "signer": "",
+                "expected": "",
+                "folder": report_folder,
+                "reason": f"{short}: отсутствует подписываемый файл GGE",
+                "level": "warn",
+            }]
+        documents = gge_documents
+
+    # Для обычной пояснительной записки подписывается только XML.
+    is_pz = short == "ПЗ"
+    xml_documents = [
+        n for n in documents if os.path.splitext(n)[1].lower() == ".xml"]
+    if is_pz and not requires_gge:
+        if not xml_documents:
+            return [{
+                "file": "",
+                "signer": "",
+                "expected": "",
+                "folder": report_folder,
+                "reason": "ПЗ: отсутствует подписываемый файл XML",
+                "level": "warn",
+            }]
+        documents = xml_documents
     missing: List[dict] = []
     for filename in documents:
-        stem, ext = os.path.splitext(filename)
         for signer in signers:
             full = _normalized_person(signer)
             surname = full.split(" ", 1)[0]
-            aliases = {full, surname}
-            expected = []
-            found = False
-            for alias in aliases:
-                variants = [f"{filename}_{alias}.sig", f"{stem}_{alias}{ext}.sig"]
-                expected.extend(variants)
-                if any(_normalized_person(v) in normalized_names for v in variants):
-                    found = True
-                    break
+            expected = [f"{filename}_{surname}.sig"]
+            found = any(
+                _signature_matches(filename, signer, sig_name)
+                for sig_name in signature_names)
             if not found:
                 missing.append({
                     "file": filename,
@@ -89,7 +168,7 @@ def missing_required_signatures(entry: RegEntry, version_folder: str,
                                signer.get("name") or signer.get("full_name") or
                                signer.get("surname") or ""),
                     "expected": expected[0] if expected else "",
-                    "folder": pub_dir,
+                    "folder": report_folder,
                 })
     return missing
 

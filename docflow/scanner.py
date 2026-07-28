@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
 
@@ -78,6 +79,66 @@ def scan_source(name: str, root: str, category: str,
     return out
 
 
+def scan_source_incremental(name: str, root: str, category: str,
+                            ignore: List[str], previous: Dict[str, dict],
+                            previous_dirs: Dict[str, int],
+                            use_hash: bool = False,
+                            skip_dirs: Optional[List[str]] = None):
+    """Быстрый обход: файлы неизменившихся каталогов берутся из общего индекса.
+
+    Каталоги всё равно перечисляются, чтобы заметить добавление/удаление папок.
+    Полное чтение метаданных файлов выполняется только в каталогах, чей mtime
+    изменился. Возвращает (records, directory_mtimes, reused_count).
+    """
+    skip_dirs = skip_dirs or []
+    if not root or not os.path.isdir(root):
+        return [], {}, 0
+    by_parent: Dict[str, List[dict]] = {}
+    root_norm = os.path.normcase(os.path.normpath(root))
+    for old in previous.values():
+        path = os.path.normcase(os.path.normpath(old.get("path", "")))
+        try:
+            if os.path.commonpath((root_norm, path)) != root_norm:
+                continue
+        except ValueError:
+            continue
+        by_parent.setdefault(os.path.dirname(path), []).append(old)
+
+    out: List[FileRec] = []
+    dir_mtimes: Dict[str, int] = {}
+    reused = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames
+                       if d not in skip_dirs and not _ignored(d, ignore)]
+        key = os.path.normcase(os.path.normpath(dirpath))
+        try:
+            mtime_ns = os.stat(dirpath).st_mtime_ns
+        except OSError:
+            continue
+        dir_mtimes[key] = mtime_ns
+        if previous_dirs.get(key) == mtime_ns:
+            current_names = {n.casefold() for n in filenames if not _ignored(n, ignore)}
+            cached = [r for r in by_parent.get(key, [])
+                      if str(r.get("name", "")).casefold() in current_names]
+            out.extend(FileRec(**{k: r.get(k) for k in FileRec.__dataclass_fields__})
+                       for r in cached)
+            reused += len(cached)
+            continue
+        for fn in filenames:
+            if _ignored(fn, ignore):
+                continue
+            full = os.path.join(dirpath, fn)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            out.append(FileRec(
+                path=full, rel=os.path.relpath(full, root), source=name,
+                category=category, size=st.st_size, mtime=round(st.st_mtime, 2),
+                name=fn, sha1=sha1_of(full) if use_hash else None))
+    return out, dir_mtimes, reused
+
+
 @dataclass
 class Changes:
     added: List[FileRec] = field(default_factory=list)
@@ -132,21 +193,41 @@ def diff(prev: Dict[str, dict], current: List[FileRec], use_hash: bool) -> Chang
 # ---------- снимок ----------
 
 def load_snapshot(path: str) -> Dict[str, dict]:
+    files, _directories = load_snapshot_index(path)
+    return files
+
+
+def load_snapshot_index(path: str):
+    """Полный общий индекс: ({path: file}, {directory: mtime_ns})."""
     if not os.path.exists(path):
-        return {}
+        return {}, {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return {r["path"]: r for r in data.get("files", [])}
-    except (OSError, ValueError):
-        return {}
+        files = {r["path"]: r for r in data.get("files", [])}
+        dirs = {str(k): int(v) for k, v in data.get("directories", {}).items()}
+        return files, dirs
+    except (OSError, ValueError, TypeError):
+        return {}, {}
 
 
-def save_snapshot(path: str, files: List[FileRec]) -> None:
+def save_snapshot(path: str, files: List[FileRec],
+                  directories: Optional[Dict[str, int]] = None) -> None:
     import datetime
-    from .config import unhide_file
-    data = {"saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
-            "files": [asdict(r) for r in files]}
-    unhide_file(path)                    # на случай, если файл был скрыт прошлой версией
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
+    from .config import hide_file, unhide_file
+    data = {"version": 2,
+            "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "files": [asdict(r) for r in files],
+            "directories": directories or {}}
+    folder = os.path.dirname(path) or "."
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".docflow_state_", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        unhide_file(path)
+        os.replace(tmp, path)
+        hide_file(path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)

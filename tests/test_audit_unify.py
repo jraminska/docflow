@@ -10,9 +10,11 @@ if ROOT not in sys.path:
 
 from docflow.config import AppConfig, Source, is_ignored  # noqa: E402
 from docflow.registry import RegEntry  # noqa: E402
+from docflow.naming import Matcher  # noqa: E402
 from docflow import planner  # noqa: E402
 from docflow import scanner  # noqa: E402
 from docflow import transfer as transfermod  # noqa: E402
+from docflow import signing  # noqa: E402
 
 
 def _entry(**kw) -> RegEntry:
@@ -175,7 +177,7 @@ def test_xml_from_composition_is_valid_in_published_folder(tmp_path):
 
 def test_audit_reports_each_missing_required_signature(tmp_path):
     cfg = _cfg(tmp_path)
-    e = _entry(signers=["Иванов", "Раминская Юлия Александровна"])
+    e = _entry(signers=["Иванов", "Раминская Юлия Александровна"], short="АР")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
@@ -193,7 +195,7 @@ def test_audit_reports_each_missing_required_signature(tmp_path):
 
 def test_audit_accepts_signer_before_document_extension(tmp_path):
     cfg = _cfg(tmp_path)
-    e = _entry(signers=["Раминская Юлия Александровна"])
+    e = _entry(signers=["Раминская Юлия Александровна"], short="АР")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
@@ -227,12 +229,12 @@ def test_signature_completeness_can_be_disabled_or_made_critical(tmp_path):
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     _mk_version(folder, pub_pdf="523-ПИР-24-ПЗ_Раздел ПД №1.pdf")
 
-    initial = _entry(signers=["Иванов", "Петров"], signature_level="none")
+    initial = _entry(signers=["Иванов", "Петров"], signature_level="none", short="АР")
     initial_actions = planner._audit_version_catalog(
         cfg, initial, str(folder), "523-ПИР-24", "01_ПЗ", True)
     assert not any(a.check == "missing_signatures" for a in initial_actions)
 
-    final = _entry(signers=["Иванов", "Петров"], signature_level="error")
+    final = _entry(signers=["Иванов", "Петров"], signature_level="error", short="АР")
     final_actions = planner._audit_version_catalog(
         cfg, final, str(folder), "523-ПИР-24", "01_ПЗ", True)
     missing = [a for a in final_actions if a.check == "missing_signatures"]
@@ -242,7 +244,7 @@ def test_signature_completeness_can_be_disabled_or_made_critical(tmp_path):
 
 def test_signature_completeness_defaults_to_warning(tmp_path):
     cfg = _cfg(tmp_path)
-    e = _entry(signers=["Иванов"])
+    e = _entry(signers=["Иванов"], short="АР")
     folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
               / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
     _mk_version(folder, pub_pdf="523-ПИР-24-ПЗ_Раздел ПД №1.pdf")
@@ -253,3 +255,185 @@ def test_signature_completeness_defaults_to_warning(tmp_path):
 
     assert len(missing) == 1
     assert missing[0].level == "warn"
+
+
+def test_global_signature_error_elevates_document_warning(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.check_levels["missing_signatures"] = "error"
+    e = _entry(signers=["Иванов"], signature_level="warn", short="АР")
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
+    _mk_version(folder, pub_pdf="523-ПИР-24-ПЗ_Раздел ПД №1.pdf")
+
+    actions = planner._audit_version_catalog(
+        cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
+    missing = [a for a in actions if a.check == "missing_signatures"]
+
+    assert len(missing) == 1
+    assert missing[0].level == "error"
+
+
+def test_audit_finds_signature_in_version_root_before_published(tmp_path):
+    cfg = _cfg(tmp_path)
+    e = _entry(signers=["Овечкин"], short="АР")
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    _mk_version(folder, pub_pdf=filename)
+    # Реальная схема старых каталогов 4300_ПД: подпись лежит в корне версии,
+    # фамилия добавлена к основе имени без повторения расширения PDF.
+    (folder / "523-ПИР-24-ПЗ_Раздел ПД №1_Овечкин.sig").write_bytes(b"sig")
+
+    actions = planner._audit_version_catalog(
+        cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
+
+    assert not any(a.check == "missing_signatures" for a in actions)
+
+
+def test_build_plan_reports_missing_signature_on_4300_server(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(
+        signers=["Раминская"], signature_level="error",
+        short="АР", section="01_ПЗ")
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / entry.oboznachenie / f"{entry.oboznachenie}_260619")
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    _mk_version(folder, pub_pdf=filename)
+    pdf = folder / "!PUBLISHED" / filename
+    rec = scanner.FileRec(
+        path=str(pdf), rel=os.path.relpath(pdf, cfg.target_pd_abs),
+        source="Сервер", category="ПД", size=pdf.stat().st_size,
+        mtime=pdf.stat().st_mtime, name=filename)
+
+    actions = planner.build_plan([rec], Matcher([entry]), cfg, {str(pdf)})
+    missing = [a for a in actions if a.check == "missing_signatures"]
+
+    assert len(missing) == 1
+    assert missing[0].level == "error"
+    assert "Раминская" in missing[0].reason
+
+
+def test_signature_name_accepts_full_name_and_extension_positions():
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    signer = "Раминская Юлия Александровна"
+
+    assert signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗ_Раздел ПД №1.pdf_Раминская Юлия Александровна.sig")
+    assert signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗ_Раздел ПД №1_Раминская Юлия Александровна.pdf.sig")
+    assert signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗ Раздел ПД №1 РАМИНСКАЯ_ЮЛИЯ.pdf.sig")
+    assert not signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗУ_Раздел ПД №2.pdf_Раминская.sig")
+    assert not signing._signature_matches(
+        filename, signer,
+        "523-ПИР-24-ПЗ_Раздел ПД №1.pdf_Иванов.sig")
+
+
+def test_signature_matching_is_not_limited_to_pdf(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(
+        signers=["Раминская Юлия Александровна"],
+        extensions=[".xml", ".sig"])
+    folder = tmp_path / "xml-version"
+    folder.mkdir()
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.xml"
+    (folder / filename).write_text("<xml/>", encoding="utf-8")
+    (folder / "523-ПИР-24-ПЗ_Раздел ПД №1_Раминская Юлия.xml.sig").write_bytes(
+        b"sig")
+
+    missing = signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg)
+
+    assert missing == []
+
+
+def test_pz_checks_xml_signature_only_when_pdf_and_xml_exist(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(
+        signers=["Раминская"], extensions=[".pdf", ".xml", ".sig"])
+    folder = tmp_path / "pz-version"
+    folder.mkdir()
+    pdf = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    xml = "523-ПИР-24-ПЗ_Раздел ПД №1.xml"
+    (folder / pdf).write_bytes(b"pdf")
+    (folder / xml).write_text("<xml/>", encoding="utf-8")
+
+    missing = signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg)
+
+    assert len(missing) == 1
+    assert missing[0]["file"] == xml
+
+    (folder / "523-ПИР-24-ПЗ_Раздел ПД №1.xml_Раминская.sig").write_bytes(
+        b"sig")
+    assert signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg) == []
+
+
+def test_pz_warns_that_xml_is_absent_instead_of_checking_pdf(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(signers=["Раминская"], extensions=[".pdf", ".xml", ".sig"])
+    folder = tmp_path / "pz-version"
+    folder.mkdir()
+    pdf = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    (folder / pdf).write_bytes(b"pdf")
+
+    missing = signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg)
+
+    assert len(missing) == 1
+    assert missing[0]["file"] == ""
+    assert missing[0]["level"] == "warn"
+    assert "отсутствует подписываемый файл XML" in missing[0]["reason"]
+
+    actions = planner._signature_actions_for_version(
+        cfg, entry, str(folder), "01_ПЗ")
+    assert len(actions) == 1
+    assert actions[0].level == "warn"
+    assert "отсутствует подписываемый файл XML" in actions[0].reason
+
+
+def test_estimate_documents_require_signature_only_for_gge(tmp_path):
+    cfg = _cfg(tmp_path)
+    for code in ("ССРСС", "ВОР", "ЛСР", "КАЦ", "ПЗ"):
+        entry = _entry(
+            short=code, razdel="12", signers=["Раминская"],
+            extensions=[".pdf", ".xlsx", ".gge", ".sig"])
+        folder = tmp_path / f"estimate-{code}"
+        folder.mkdir()
+        prefix = f"523-ПИР-24-{code}_Сметная документация"
+        (folder / f"{prefix}.pdf").write_bytes(b"pdf")
+        (folder / f"{prefix}.xlsx").write_bytes(b"xlsx")
+        (folder / f"{prefix}.gge").write_bytes(b"gge")
+
+        missing = signing.missing_required_signatures_in_folder(
+            entry, str(folder), cfg)
+        assert len(missing) == 1
+        assert missing[0]["file"] == f"{prefix}.gge"
+
+        (folder / f"{prefix}.gge_Раминская Юлия Александровна.sig").write_bytes(
+            b"sig")
+        assert signing.missing_required_signatures_in_folder(
+            entry, str(folder), cfg) == []
+
+
+def test_estimate_document_warns_when_gge_is_absent(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(
+        short="ВОР", razdel="12", signers=["Раминская"],
+        extensions=[".pdf", ".xlsx", ".gge", ".sig"])
+    folder = tmp_path / "estimate"
+    folder.mkdir()
+    (folder / "523-ПИР-24-ВОР.pdf").write_bytes(b"pdf")
+
+    missing = signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg)
+
+    assert len(missing) == 1
+    assert missing[0]["level"] == "warn"
+    assert "отсутствует подписываемый файл GGE" in missing[0]["reason"]

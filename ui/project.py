@@ -10,6 +10,7 @@ from docflow import config as cfgmod
 from docflow import registry as regmod
 
 from .checks import ChecksDialog
+from .signature_settings import SignatureSettingsDialog
 from .source_editor import SourceEditor
 
 
@@ -175,6 +176,8 @@ class ProjectDialog(tk.Toplevel):
                    command=self._do_composition).pack(side="left")
         ttk.Button(cbtns, text="📁 Создать папки",
                    command=self._do_folders).pack(side="left", padx=6)
+        ttk.Button(cbtns, text="✍ Подписанты ЭЦП…",
+                   command=self._open_signatures).pack(side="left", padx=6)
 
     def _do_composition(self):
         self._apply_fields()
@@ -187,6 +190,14 @@ class ProjectDialog(tk.Toplevel):
         cfgmod.save(self.cfg)
         self.app._save_project_settings()
         self.app.do_create_folders()
+
+    def _open_signatures(self):
+        if not self.app.structure:
+            messagebox.showinfo(
+                "Подписанты ЭЦП",
+                "Сначала сформируйте состав проекта из Excel.")
+            return
+        SignatureSettingsDialog(self, self.app)
 
     def _apply_fields(self):
         root = self.v_root.get().strip()
