@@ -269,3 +269,20 @@ def test_global_signature_error_elevates_document_warning(tmp_path):
 
     assert len(missing) == 1
     assert missing[0].level == "error"
+
+
+def test_audit_finds_signature_in_version_root_before_published(tmp_path):
+    cfg = _cfg(tmp_path)
+    e = _entry(signers=["Овечкин"])
+    folder = (tmp_path / "proj" / "4300_ПД" / "01_ПЗ"
+              / "523-ПИР-24-ПЗ" / "523-ПИР-24-ПЗ_260728")
+    filename = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    _mk_version(folder, pub_pdf=filename)
+    # Реальная схема старых каталогов 4300_ПД: подпись лежит в корне версии,
+    # фамилия добавлена к основе имени без повторения расширения PDF.
+    (folder / "523-ПИР-24-ПЗ_Раздел ПД №1_Овечкин.sig").write_bytes(b"sig")
+
+    actions = planner._audit_version_catalog(
+        cfg, e, str(folder), "523-ПИР-24", "01_ПЗ", True)
+
+    assert not any(a.check == "missing_signatures" for a in actions)

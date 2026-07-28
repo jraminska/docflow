@@ -54,13 +54,43 @@ def missing_required_signatures(entry: RegEntry, version_folder: str,
         return []
     pub_dir = version_folder if planner._loose_catalog(entry, cfg) else os.path.join(
         version_folder, planner._pub_of(entry, cfg))
-    if not os.path.isdir(pub_dir):
+    folders = [pub_dir]
+    if os.path.normpath(pub_dir) != os.path.normpath(version_folder):
+        # В существующих проектах часть подписей лежит прямо в каталоге версии,
+        # даже если для тома настроена !PUBLISHED.
+        folders.append(version_folder)
+    return _missing_required_signatures_in_folders(
+        entry, folders, cfg, pub_dir if os.path.isdir(pub_dir) else version_folder)
+
+
+def missing_required_signatures_in_folder(entry: RegEntry, pub_dir: str,
+                                          cfg: AppConfig) -> List[dict]:
+    """Недостающие подписи в фактической плоской папке публикуемых файлов.
+
+    Используется и для !PUBLISHED, и для каталогов версий внутри !LATEST,
+    куда содержимое !PUBLISHED копируется без дополнительной подпапки.
+    """
+    return _missing_required_signatures_in_folders(
+        entry, [pub_dir], cfg, pub_dir)
+
+
+def _missing_required_signatures_in_folders(entry: RegEntry, folders,
+                                            cfg: AppConfig,
+                                            report_folder: str) -> List[dict]:
+    signers = [s for s in (getattr(entry, "signers", None) or [])
+               if _normalized_person(s)]
+    if not signers:
         return []
-    try:
-        names = [n for n in os.listdir(pub_dir)
-                 if os.path.isfile(os.path.join(pub_dir, n))]
-    except OSError:
-        return []
+    names = []
+    for folder in folders:
+        if not os.path.isdir(folder):
+            continue
+        try:
+            names.extend(
+                n for n in os.listdir(folder)
+                if os.path.isfile(os.path.join(folder, n)))
+        except OSError:
+            continue
     normalized_names = {_normalized_person(n) for n in names}
     allowed = {x.lower() for x in (entry.extensions or cfg.published_extensions)}
     sig_exts = {x.lower() for x in cfg.sig_extensions}
@@ -77,7 +107,11 @@ def missing_required_signatures(entry: RegEntry, version_folder: str,
             expected = []
             found = False
             for alias in aliases:
-                variants = [f"{filename}_{alias}.sig", f"{stem}_{alias}{ext}.sig"]
+                variants = [
+                    f"{filename}_{alias}.sig",
+                    f"{stem}_{alias}{ext}.sig",
+                    f"{stem}_{alias}.sig",
+                ]
                 expected.extend(variants)
                 if any(_normalized_person(v) in normalized_names for v in variants):
                     found = True
@@ -89,7 +123,7 @@ def missing_required_signatures(entry: RegEntry, version_folder: str,
                                signer.get("name") or signer.get("full_name") or
                                signer.get("surname") or ""),
                     "expected": expected[0] if expected else "",
-                    "folder": pub_dir,
+                    "folder": report_folder,
                 })
     return missing
 
