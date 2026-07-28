@@ -118,6 +118,13 @@ def _missing_required_signatures_in_folders(entry: RegEntry, folders,
     documents = [n for n in names
                  if os.path.splitext(n)[1].lower() in allowed - sig_exts
                  and not planner._ignored(n, cfg)]
+    # Для пояснительной записки XML является подписываемым экземпляром.
+    # Сопутствующий PDF не должен порождать второе требование той же ЭЦП.
+    is_pz = str(getattr(entry, "short", "") or "").strip().upper() == "ПЗ"
+    xml_documents = [
+        n for n in documents if os.path.splitext(n)[1].lower() == ".xml"]
+    if is_pz and xml_documents:
+        documents = xml_documents
     missing: List[dict] = []
     for filename in documents:
         stem, ext = os.path.splitext(filename)

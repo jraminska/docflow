@@ -348,3 +348,41 @@ def test_signature_matching_is_not_limited_to_pdf(tmp_path):
         entry, str(folder), cfg)
 
     assert missing == []
+
+
+def test_pz_checks_xml_signature_only_when_pdf_and_xml_exist(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(
+        signers=["Раминская"], extensions=[".pdf", ".xml", ".sig"])
+    folder = tmp_path / "pz-version"
+    folder.mkdir()
+    pdf = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    xml = "523-ПИР-24-ПЗ_Раздел ПД №1.xml"
+    (folder / pdf).write_bytes(b"pdf")
+    (folder / xml).write_text("<xml/>", encoding="utf-8")
+
+    missing = signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg)
+
+    assert len(missing) == 1
+    assert missing[0]["file"] == xml
+
+    (folder / "523-ПИР-24-ПЗ_Раздел ПД №1.xml_Раминская.sig").write_bytes(
+        b"sig")
+    assert signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg) == []
+
+
+def test_pz_falls_back_to_pdf_signature_when_xml_is_absent(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(signers=["Раминская"], extensions=[".pdf", ".xml", ".sig"])
+    folder = tmp_path / "pz-version"
+    folder.mkdir()
+    pdf = "523-ПИР-24-ПЗ_Раздел ПД №1.pdf"
+    (folder / pdf).write_bytes(b"pdf")
+
+    missing = signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg)
+
+    assert len(missing) == 1
+    assert missing[0]["file"] == pdf
