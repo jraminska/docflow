@@ -43,6 +43,27 @@ def _entry_index(entries) -> dict:
     return result
 
 
+def _entry_order(entries) -> dict:
+    return {id(entry): index for index, entry in enumerate(entries or [])}
+
+
+def _area_order(area: str) -> int:
+    value = (area or "").upper()
+    if value == "ПД":
+        return 0
+    if value == "ИИ":
+        return 1
+    return 2
+
+
+def _area_title(area: str) -> str:
+    if (area or "").upper() == "ПД":
+        return "Проектная документация"
+    if (area or "").upper() == "ИИ":
+        return "Отчетная техническая документация"
+    return area or "Документация"
+
+
 def _file_context(rel: str, entry_lookup: dict) -> tuple:
     parts = rel.replace("\\", "/").split("/")
     entry = None
@@ -108,6 +129,7 @@ def build_package(cfg: AppConfig, source_root: str, target_dir: str,
     rows = []
     copied = 0
     entry_lookup = _entry_index(entries)
+    entry_positions = _entry_order(entries)
     for scan_root in _scan_roots(source_root, selected_folders):
         for dirpath, dirnames, filenames in os.walk(scan_root):
             dirnames[:] = [
@@ -133,6 +155,8 @@ def build_package(cfg: AppConfig, source_root: str, target_dir: str,
                     "section": section,
                     "section_title": _section_title(entry, section),
                     "group_key": f"{area}:{razdel or section}",
+                    "area": area,
+                    "entry_order": entry_positions.get(id(entry), 10 ** 9),
                     "designation": designation,
                     "volume_name": volume_name,
                     "volume_number": volume_number,
@@ -152,7 +176,8 @@ def build_package(cfg: AppConfig, source_root: str, target_dir: str,
                     progress(copied, rel)
     registry = os.path.join(target_dir, REGISTRY_NAME)
     rows.sort(key=lambda row: (
-        row["group_key"].casefold(), row["designation"].casefold(),
+        _area_order(row["area"]), row["entry_order"],
+        row["designation"].casefold(),
         row["version"], row["name"].casefold().replace(".sig", ""),
         row["kind"] == "Подпись"))
     _write_registry(
@@ -215,15 +240,27 @@ def _write_registry(
         cell.border = border
     ws.row_dimensions[header_row].height = 42
 
+    previous_area = None
     previous_group = None
     for row in rows:
-        if row["group_key"] != previous_group:
+        if row["area"] != previous_area:
+            ws.append(["", "", _area_title(row["area"]), "", "", "", ""])
+            section_row = ws.max_row
+            for cell in ws[section_row]:
+                cell.fill = section_fill
+                cell.font = Font(
+                    name="Arial", size=10, bold=True,
+                    color="44546A")
+                cell.border = border
+            previous_area = row["area"]
+            previous_group = None
+        if (row["area"] or "").upper() == "ПД" and row["group_key"] != previous_group:
             ws.append(["", "", row["section_title"], "", "", "", ""])
             section_row = ws.max_row
             for cell in ws[section_row]:
                 cell.fill = section_fill
                 cell.font = Font(
-                    name="Arial", size=10, bold=True, italic=True,
+                    name="Arial", size=10, bold=True,
                     color="44546A")
                 cell.border = border
             previous_group = row["group_key"]
