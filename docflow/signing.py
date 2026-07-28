@@ -118,12 +118,30 @@ def _missing_required_signatures_in_folders(entry: RegEntry, folders,
     documents = [n for n in names
                  if os.path.splitext(n)[1].lower() in allowed - sig_exts
                  and not planner._ignored(n, cfg)]
-    # Для пояснительной записки XML является подписываемым экземпляром.
-    # Сопутствующий PDF не должен порождать второе требование той же ЭЦП.
-    is_pz = str(getattr(entry, "short", "") or "").strip().upper() == "ПЗ"
+    short = str(getattr(entry, "short", "") or "").strip().upper()
+    # Для сметных ССРСС/ВОР/ЛСР/КАЦ и сметной ПЗ подписывается только GGE.
+    smeta_gge_codes = {"ССРСС", "ВОР", "ЛСР", "КАЦ"}
+    requires_gge = (short in smeta_gge_codes
+                    or (short == "ПЗ" and planner._is_smeta(entry, cfg)))
+    gge_documents = [
+        n for n in documents if os.path.splitext(n)[1].lower() == ".gge"]
+    if requires_gge:
+        if not gge_documents:
+            return [{
+                "file": "",
+                "signer": "",
+                "expected": "",
+                "folder": report_folder,
+                "reason": f"{short}: отсутствует подписываемый файл GGE",
+                "level": "warn",
+            }]
+        documents = gge_documents
+
+    # Для обычной пояснительной записки подписывается только XML.
+    is_pz = short == "ПЗ"
     xml_documents = [
         n for n in documents if os.path.splitext(n)[1].lower() == ".xml"]
-    if is_pz:
+    if is_pz and not requires_gge:
         if not xml_documents:
             return [{
                 "file": "",
@@ -136,7 +154,6 @@ def _missing_required_signatures_in_folders(entry: RegEntry, folders,
         documents = xml_documents
     missing: List[dict] = []
     for filename in documents:
-        stem, ext = os.path.splitext(filename)
         for signer in signers:
             full = _normalized_person(signer)
             surname = full.split(" ", 1)[0]

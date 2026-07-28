@@ -396,3 +396,44 @@ def test_pz_warns_that_xml_is_absent_instead_of_checking_pdf(tmp_path):
     assert len(actions) == 1
     assert actions[0].level == "warn"
     assert "отсутствует подписываемый файл XML" in actions[0].reason
+
+
+def test_estimate_documents_require_signature_only_for_gge(tmp_path):
+    cfg = _cfg(tmp_path)
+    for code in ("ССРСС", "ВОР", "ЛСР", "КАЦ", "ПЗ"):
+        entry = _entry(
+            short=code, razdel="12", signers=["Раминская"],
+            extensions=[".pdf", ".xlsx", ".gge", ".sig"])
+        folder = tmp_path / f"estimate-{code}"
+        folder.mkdir()
+        prefix = f"523-ПИР-24-{code}_Сметная документация"
+        (folder / f"{prefix}.pdf").write_bytes(b"pdf")
+        (folder / f"{prefix}.xlsx").write_bytes(b"xlsx")
+        (folder / f"{prefix}.gge").write_bytes(b"gge")
+
+        missing = signing.missing_required_signatures_in_folder(
+            entry, str(folder), cfg)
+        assert len(missing) == 1
+        assert missing[0]["file"] == f"{prefix}.gge"
+
+        (folder / f"{prefix}.gge_Раминская Юлия Александровна.sig").write_bytes(
+            b"sig")
+        assert signing.missing_required_signatures_in_folder(
+            entry, str(folder), cfg) == []
+
+
+def test_estimate_document_warns_when_gge_is_absent(tmp_path):
+    cfg = _cfg(tmp_path)
+    entry = _entry(
+        short="ВОР", razdel="12", signers=["Раминская"],
+        extensions=[".pdf", ".xlsx", ".gge", ".sig"])
+    folder = tmp_path / "estimate"
+    folder.mkdir()
+    (folder / "523-ПИР-24-ВОР.pdf").write_bytes(b"pdf")
+
+    missing = signing.missing_required_signatures_in_folder(
+        entry, str(folder), cfg)
+
+    assert len(missing) == 1
+    assert missing[0]["level"] == "warn"
+    assert "отсутствует подписываемый файл GGE" in missing[0]["reason"]
