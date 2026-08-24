@@ -131,3 +131,26 @@ def test_registry_puts_pd_before_surveys_and_keeps_volume_order(tmp_path):
         assert ws.cell(row, 3).font.bold is True
         assert ws.cell(row, 3).fill.fgColor.rgb.endswith("D9E2F3")
     wb.close()
+
+
+def test_customer_package_keeps_smeta_parent_folders(tmp_path):
+    source = tmp_path / "!LATEST"
+    vor = (source / "02_ПД" / "12_СМ" / "519-ПИР-23-СМ2"
+           / "519-ПИР-23-СМ2-ПОС-ВОР1_260101")
+    lsr = (source / "02_ПД" / "12_СМ" / "519-ПИР-23-СМ3"
+           / "519-ПИР-23-СМ3_01-01-01_ЛСР_260101")
+    vor.mkdir(parents=True)
+    lsr.mkdir(parents=True)
+    (vor / "vor.pdf").write_bytes(b"vor")
+    (lsr / "lsr.xlsx").write_bytes(b"lsr")
+    target = tmp_path / "package"
+
+    customer_package.build_package(
+        AppConfig(project_root=str(tmp_path), latest_dir="!LATEST"),
+        str(source), str(target),
+        selected_folders=[os.path.join("02_ПД", "12_СМ")])
+
+    assert (target / "02_ПД" / "12_СМ" / "519-ПИР-23-СМ2"
+            / "519-ПИР-23-СМ2-ПОС-ВОР1_260101" / "vor.pdf").is_file()
+    assert (target / "02_ПД" / "12_СМ" / "519-ПИР-23-СМ3"
+            / "519-ПИР-23-СМ3_01-01-01_ЛСР_260101" / "lsr.xlsx").is_file()
