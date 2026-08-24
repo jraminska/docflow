@@ -14,7 +14,8 @@
   • старые версии этого документа в !LATEST удаляются (это исключение
     из правила «в рабочих томах только архивируем» — комплект !LATEST
     должен содержать одну актуальную версию; удаление — после подтверждения
-    в диалоге). Лишнее в !LATEST (дубли/чужой шифр) — remove_paths.
+    в диалоге). Лишнее в !LATEST (дубли, чужой шифр, файлы и папки вне
+    каталогов версии, документы не в своей папке) — remove_paths.
 """
 from __future__ import annotations
 
@@ -27,14 +28,82 @@ import zlib
 from typing import List, Optional
 
 from . import planner
-from .config import AppConfig
+from .config import AppConfig, is_ignored
 from .naming import _nospace, canonical_name
 from .registry import (RegEntry, strip_proj_prefix, _find_header, _numstr,
                        _gen_oboz, _has_sub, _norm, openpyxl, parse_row)
-from .transfer import crc_diff
 
 LATEST_MANIFEST = ".docflow_latest.json"
 PD_SUB = "02_ПД"
+
+
+def _latest_ignored_dir(name: str, cfg: AppConfig) -> bool:
+    """Папка, которую нельзя переносить в !LATEST.
+
+    Используем те же проектные настройки, что и при сканировании:
+    ``scan_skip_dirs`` и пользовательские ``exclude_folders``.
+    Сравнение имён регистронезависимое — это соответствует поведению Windows.
+    """
+    key = str(name or "").casefold()
+    skipped = {str(x).casefold() for x in (cfg.scan_skip_dirs or []) if x}
+    excluded = {str(x).casefold() for x in (cfg.exclude_folders or []) if x}
+    return key in skipped or key in excluded
+
+
+def _latest_copy_ignore(cfg: AppConfig):
+    """Callback для shutil.copytree: единые правила исключений DocFlow.
+
+    - файлы и папки по ``cfg.ignore_patterns``;
+    - папки из ``cfg.scan_skip_dirs``;
+    - папки из ``cfg.exclude_folders``.
+
+    Callback вызывается ``copytree`` на каждом уровне дерева, поэтому правила
+    действуют и для вложенных папок внутри !PUBLISHED.
+    """
+    patterns = list(cfg.ignore_patterns or [])
+
+    def ignore(directory: str, names: List[str]) -> List[str]:
+        out: List[str] = []
+        for name in names:
+            if is_ignored(name, patterns):
+                out.append(name)
+                continue
+            full = os.path.join(directory, name)
+            if os.path.isdir(full) and _latest_ignored_dir(name, cfg):
+                out.append(name)
+        return out
+
+    return ignore
+
+
+def _latest_fileset_crc(folder: str, cfg: AppConfig) -> dict:
+    """CRC32 значимых файлов с теми же исключениями, что при копировании.
+
+    Это важно для статуса !LATEST: исключённые папки не должны давать ложный
+    DIFF после того, как мы намеренно не скопировали их из !PUBLISHED.
+    """
+    out: dict = {}
+    patterns = list(cfg.ignore_patterns or [])
+    for dp, dns, fns in os.walk(folder):
+        dns[:] = [d for d in dns
+                  if not is_ignored(d, patterns) and not _latest_ignored_dir(d, cfg)]
+        for fn in fns:
+            if is_ignored(fn, patterns):
+                continue
+            full = os.path.join(dp, fn)
+            rel = os.path.relpath(full, folder).replace("\\", "/").lower()
+            out[rel] = _file_crc32(full)
+    return out
+
+
+def _latest_crc_diff(src_folder: str, dest_folder: str, cfg: AppConfig):
+    """Сравнить источник и !LATEST только по файлам, которые подлежат копированию."""
+    src = _latest_fileset_crc(src_folder, cfg)
+    dest = _latest_fileset_crc(dest_folder, cfg)
+    added = sorted(k for k in src if k not in dest)
+    removed = sorted(k for k in dest if k not in src)
+    changed = sorted(k for k in src if k in dest and src[k] != dest[k])
+    return added, removed, changed
 
 
 def _file_crc32(path: str) -> str:
@@ -169,7 +238,43 @@ def latest_dest_root(cfg: AppConfig, entry) -> str:
     except (KeyError, IndexError, ValueError):
         rel = os.path.join(ph["area"], ph["section"])
     parts = [p for p in re.split(r"[\\/]+", rel) if p]
+    parent = planner._smeta_parent(getattr(entry, "oboznachenie", "") or "")
+    if parent:
+        # ВОР/ЛСР/ОСР/СВОР — внутрь родительской части: 12_СМ/хх-ПИР-СМ3/…
+        section = ph["section"]
+        if section and section in parts:
+            parts.insert(parts.index(section) + 1, parent)
+        else:
+            parts.append(parent)
     return os.path.join(cfg.latest_abs, *parts) if parts else cfg.latest_abs
+
+
+def _same_dir(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _iter_version_catalogs(root: str, skip_dir=None):
+    """Каталоги версии {обозначение}_{ггммдд} по дереву. Внутрь них не заходим."""
+    if not os.path.isdir(root):
+        return
+    for dp, dns, _fns in os.walk(root):
+        keep = []
+        for dn in dns:
+            if skip_dir and skip_dir(dn):
+                continue
+            pfx, d6 = planner.cat_match(dn)
+            if pfx:
+                yield dp, dn, pfx, d6, os.path.join(dp, dn)
+            else:
+                keep.append(dn)
+        dns[:] = keep
+
+
+def _remove_matching_catalogs(root: str, core: str) -> None:
+    """Удаляет все каталоги версии документа (по ядру обозначения) в !LATEST."""
+    for _dp, _dn, pfx, _d6, full in list(_iter_version_catalogs(root)):
+        if _nospace(strip_proj_prefix(pfx)) == core:
+            shutil.rmtree(full, ignore_errors=True)
 
 OK = "🟢"          # в !LATEST актуальная версия
 NEWER = "🟠"       # в 4300_ПД есть новее
@@ -265,15 +370,19 @@ def compare(cfg: AppConfig, entries: List[RegEntry]) -> List[dict]:
         elif lat < pd_date:
             status = NEWER
         else:
-            status = OK
-            # та же дата версии — файл в 4300_ПД могли переписать/поправить,
-            # не меняя каталог версии: сверяем состав и содержимое по CRC32
-            # (та же «параноик-проверка», что и при переносе от субподрядчика)
-            if src:
-                dest_root = latest_dest_root(cfg, e)
-                dest = os.path.join(dest_root, f"{e.oboznachenie}_{lat}")
-                if os.path.isdir(dest):
-                    added, removed, changed = crc_diff(src, dest, cfg)
+            dest_root = latest_dest_root(cfg, e)
+            dest = os.path.join(dest_root, f"{e.oboznachenie}_{lat}")
+            # в манифесте дата есть, но каталог лежит не там (например ВОР
+            # остался прямо в 12_СМ вместо 12_СМ/хх-ПИР-СМ2) — это «нет»
+            if not os.path.isdir(dest):
+                status = ABSENT
+            else:
+                status = OK
+                # та же дата версии — файл в 4300_ПД могли переписать/поправить,
+                # не меняя каталог версии: сверяем состав и содержимое по CRC32.
+                # Исключённые из копирования папки в сравнении также не участвуют.
+                if src:
+                    added, removed, changed = _latest_crc_diff(src, dest, cfg)
                     if added or removed or changed:
                         status = DIFF
                         diff = {"added": added, "removed": removed, "changed": changed}
@@ -286,8 +395,12 @@ def compare(cfg: AppConfig, entries: List[RegEntry]) -> List[dict]:
 def update_latest(cfg: AppConfig, rows: List[dict]) -> dict:
     """Копирует папку версии каждого выбранного документа в !LATEST целиком
     (содержимое !PUBLISHED — для обычных, всю папку версии — для смет).
+
+    При копировании на любом уровне дерева исключаются:
+    ``ignore_patterns``, ``scan_skip_dirs`` и ``exclude_folders``.
     Старые версии этого документа в !LATEST удаляются. Возвращает
-    {обозначение: дата} для записи в Excel."""
+    {обозначение: дата} для записи в Excel.
+    """
     man = load_manifest(cfg)
     updated = {}
     for r in rows:
@@ -297,19 +410,13 @@ def update_latest(cfg: AppConfig, rows: List[dict]) -> dict:
         dest_root = latest_dest_root(cfg, e)
         os.makedirs(dest_root, exist_ok=True)
         core = _nospace(strip_proj_prefix(e.oboznachenie))
-        # удаляем старые версии этого документа в !LATEST
-        for name in os.listdir(dest_root):
-            full = os.path.join(dest_root, name)
-            if not os.path.isdir(full):
-                continue
-            prefix, _d = planner.cat_match(name)
-            if prefix and _nospace(strip_proj_prefix(prefix)) == core:
-                shutil.rmtree(full, ignore_errors=True)
+        # старые версии — по всему !LATEST, не только в новой папке:
+        # иначе при смене раскладки (ВОР из 12_СМ → 12_СМ/хх-ПИР-СМ2)
+        # прежняя копия останется «лишней».
+        _remove_matching_catalogs(cfg.latest_abs, core)
         dest = os.path.join(dest_root, f"{e.oboznachenie}_{pd_date}")
-        # не тащим в !LATEST служебные/рабочие папки и мусор
-        skip = shutil.ignore_patterns("_", "*_DRAFT*", "*_draft*", "Thumbs.db",
-                                      "desktop.ini", "~$*", "*.tmp")
-        shutil.copytree(src, dest, dirs_exist_ok=True, ignore=skip)
+        shutil.copytree(src, dest, dirs_exist_ok=True,
+                        ignore=_latest_copy_ignore(cfg))
         man[e.key] = pd_date
         updated[e.oboznachenie] = pd_date
     save_manifest(cfg, man)
@@ -318,46 +425,109 @@ def update_latest(cfg: AppConfig, rows: List[dict]) -> dict:
 
 # ---------- лишнее в !LATEST ----------
 def latest_extras(cfg: AppConfig, entries: List[RegEntry]) -> List[dict]:
-    """Что в !LATEST лишнее: дубли версий (есть новее), чужой шифр/год, папки
-    с обозначением не из состава. Работает при ЛЮБОЙ вложенности (layout) —
-    ищет каталоги версий по всему дереву !LATEST. Возвращает [{path, reason}]."""
-    from .naming import _nospace
-    from .registry import strip_proj_prefix
+    """Что в !LATEST лишнее: дубли версий, чужой шифр/год, каталоги не из состава,
+    каталоги не в своей папке, лишние файлы и посторонние папки.
+    Работает при любой вложенности (layout). Возвращает [{path, reason}]."""
     extras: List[dict] = []
     root = cfg.latest_abs
     if not os.path.isdir(root):
         return extras
     proj = planner._project_shifr(entries)
     cores = {_nospace(strip_proj_prefix(e.oboznachenie)) for e in entries}
-    # каталог версии: (папка-родитель, ядро) -> [(имя, дата, путь)]
+    expected_parent: dict = {}
+    expected_dirs = {os.path.normcase(os.path.normpath(root))}
+    for e in entries:
+        core = _nospace(strip_proj_prefix(e.oboznachenie))
+        dest = os.path.normpath(latest_dest_root(cfg, e))
+        expected_parent[core] = dest
+        cur = dest
+        while True:
+            expected_dirs.add(os.path.normcase(os.path.normpath(cur)))
+            if _same_dir(cur, root):
+                break
+            parent = os.path.dirname(cur)
+            if parent == cur or len(os.path.normpath(parent)) < len(os.path.normpath(root)):
+                break
+            cur = parent
+
+    excluded = {str(x).casefold() for x in (cfg.exclude_folders or []) if x}
+    patterns = list(cfg.ignore_patterns or [])
+    service_files = {LATEST_MANIFEST.lower(), ".docflow_crc.json"}
+
+    def skip_dir(name: str) -> bool:
+        if is_ignored(name, patterns):
+            return True
+        return str(name).casefold() in excluded
+
     by_parent_core: dict = {}
-    manifest_names = {LATEST_MANIFEST.lower(), ".docflow_crc.json"}
-    for dp, dns, _fns in os.walk(root):
-        keep = []
-        for dn in dns:
-            full = os.path.join(dp, dn)
-            pfx, d6 = planner.cat_match(dn)
-            if pfx:                                   # это каталог версии — внутрь не идём
-                core = _nospace(strip_proj_prefix(pfx))
-                rel = os.path.relpath(full, root)
-                csh = planner._shifr_of(pfx)
-                if proj and csh and csh != proj:
-                    extras.append({"path": full, "reason": f"чужой шифр/год — {rel}"})
-                elif cores and core not in cores:
-                    extras.append({"path": full,
-                                   "reason": f"обозначение не из состава — {rel}"})
-                else:
-                    by_parent_core.setdefault((dp, core), []).append((dn, d6, full))
-                continue
-            keep.append(dn)                           # обычная папка — углубляемся
-        dns[:] = keep
-    # дубли версий одного документа в одной папке — оставить самую свежую
+    found_catalogs: List[tuple] = []
+    for dp, dn, pfx, d6, full in _iter_version_catalogs(root, skip_dir=skip_dir):
+        found_catalogs.append((dp, dn, pfx, d6, full))
+        core = _nospace(strip_proj_prefix(pfx))
+        rel = os.path.relpath(full, root)
+        csh = planner._shifr_of(pfx)
+        if proj and csh and csh != proj:
+            extras.append({"path": full, "reason": f"чужой шифр/год — {rel}"})
+        elif cores and core not in cores:
+            extras.append({"path": full,
+                           "reason": f"обозначение не из состава — {rel}"})
+        else:
+            expected = expected_parent.get(core)
+            if expected and not _same_dir(dp, expected):
+                extras.append({
+                    "path": full,
+                    "reason": f"не в своей папке — {rel} "
+                              f"(ожидается {os.path.relpath(expected, root)})",
+                })
+            else:
+                by_parent_core.setdefault((dp, core), []).append((dn, d6, full))
+
     for (_dp, _core), lst in by_parent_core.items():
         if len(lst) > 1:
             lst.sort(key=lambda t: t[1] or "")
             for name, _d6, full in lst[:-1]:
                 rel = os.path.relpath(full, root)
                 extras.append({"path": full, "reason": f"дубль версии (есть новее) — {rel}"})
+
+    legitimate = set(expected_dirs)
+    for dp, _dn, _pfx, _d6, _full in found_catalogs:
+        cur = os.path.normpath(dp)
+        while True:
+            legitimate.add(os.path.normcase(cur))
+            if _same_dir(cur, root):
+                break
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+
+    root_key = os.path.normcase(os.path.normpath(root))
+    for dp, dns, fns in os.walk(root):
+        keep = []
+        for dn in dns:
+            if skip_dir(dn):
+                continue
+            if planner.cat_match(dn)[0]:
+                continue
+            full = os.path.join(dp, dn)
+            keep.append(dn)
+            n = os.path.normcase(os.path.normpath(full))
+            if n in legitimate:
+                continue
+            parent_key = os.path.normcase(os.path.normpath(dp))
+            if parent_key != root_key and parent_key not in legitimate:
+                continue
+            rel = os.path.relpath(full, root)
+            extras.append({"path": full, "reason": f"лишняя папка — {rel}"})
+        dns[:] = keep
+        if os.path.normcase(os.path.normpath(dp)) not in legitimate:
+            continue
+        for fn in fns:
+            if is_ignored(fn, patterns) or fn.lower() in service_files:
+                continue
+            full = os.path.join(dp, fn)
+            rel = os.path.relpath(full, root)
+            extras.append({"path": full, "reason": f"лишний файл — {rel}"})
     return extras
 
 
